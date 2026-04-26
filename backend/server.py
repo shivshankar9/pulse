@@ -630,9 +630,13 @@ class TicketIn(BaseModel):
     status: Literal["open", "pending", "resolved", "closed"] = "open"
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
     channel: Literal["portal", "email", "whatsapp", "call", "chat", "internal"] = "internal"
+    assignee_id: Optional[str] = None
+    group_id: Optional[str] = None
+    custom: dict = {}
 
 class TicketCommentIn(BaseModel):
     body: str
+    internal: bool = False
 
 class PublicTicketIn(BaseModel):
     workspace_email: EmailStr  # the operator email to route the ticket to
@@ -648,11 +652,21 @@ async def list_tickets(user=Depends(get_current_user)):
 
 @api_router.post("/tickets")
 async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
+    cfg = await db.helpdesk_config.find_one({}, {"_id": 0}) or {}
+    sla_cfg = cfg.get("sla") or SLAConfigIn().model_dump()
+    sla_dates = _sla_due_dates(payload.priority, sla_cfg)
+    assignee = payload.assignee_id
+    if not assignee:
+        assignee = await _auto_assign(payload.channel)
     doc = {
         **payload.model_dump(),
+        "assignee_id": assignee,
         "id": str(uuid.uuid4()),
         "owner_id": user["id"],
         "comments": [],
+        **sla_dates,
+        "first_responded_at": None,
+        "resolved_at": None,
         "created_at": now_utc_iso(),
         "updated_at": now_utc_iso(),
     }
@@ -662,9 +676,14 @@ async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
 
 @api_router.put("/tickets/{tid}")
 async def update_ticket(tid: str, payload: TicketIn, user=Depends(get_current_user)):
+    update_set = {**payload.model_dump(), "updated_at": now_utc_iso()}
+    # If status flipped to resolved, mark resolved_at
+    existing = await db.tickets.find_one({"id": tid, "owner_id": user["id"]}, {"_id": 0})
+    if existing and payload.status == "resolved" and existing.get("status") != "resolved":
+        update_set["resolved_at"] = now_utc_iso()
     res = await db.tickets.update_one(
         {"id": tid, "owner_id": user["id"]},
-        {"$set": {**payload.model_dump(), "updated_at": now_utc_iso()}},
+        {"$set": update_set},
     )
     if res.matched_count == 0:
         raise HTTPException(404, "Not found")
@@ -675,12 +694,20 @@ async def add_ticket_comment(tid: str, payload: TicketCommentIn, user=Depends(ge
     comment = {
         "id": str(uuid.uuid4()),
         "author": user["name"],
+        "author_id": user["id"],
         "body": payload.body,
+        "internal": payload.internal,
         "created_at": now_utc_iso(),
     }
+    update_set = {"updated_at": now_utc_iso()}
+    # Mark first_responded if this is a public reply by an operator
+    if not payload.internal:
+        ticket = await db.tickets.find_one({"id": tid, "owner_id": user["id"]}, {"_id": 0})
+        if ticket and not ticket.get("first_responded_at"):
+            update_set["first_responded_at"] = now_utc_iso()
     res = await db.tickets.update_one(
         {"id": tid, "owner_id": user["id"]},
-        {"$push": {"comments": comment}, "$set": {"updated_at": now_utc_iso()}},
+        {"$push": {"comments": comment}, "$set": update_set},
     )
     if res.matched_count == 0:
         raise HTTPException(404, "Not found")
@@ -772,8 +799,6 @@ async def upsert_channel(payload: ChannelConfigIn, user=Depends(get_current_user
         })
     return await db.channels.find_one({"owner_id": user["id"], "channel": payload.channel}, {"_id": 0})
 
-# ---------- Mount ----------
-
 # ---------- Roles ----------
 class RoleIn(BaseModel):
     name: str
@@ -850,6 +875,14 @@ async def update_user_role(uid: str, payload: UserRoleUpdateIn, user=Depends(req
     valid = list(SYSTEM_ROLES.keys()) + [r["id"] for r in await db.roles.find({}, {"id": 1, "_id": 0}).to_list(200)]
     if payload.role not in valid:
         raise HTTPException(400, "Unknown role")
+    # Last-admin guard
+    target = await db.users.find_one({"id": uid}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "User not found")
+    if target.get("role") == "admin" and payload.role != "admin":
+        admin_count = await db.users.count_documents({"role": "admin"})
+        if admin_count <= 1:
+            raise HTTPException(400, "Cannot demote the last admin. Promote another user to admin first.")
     res = await db.users.update_one({"id": uid}, {"$set": {"role": payload.role}})
     if res.matched_count == 0:
         raise HTTPException(404, "User not found")
@@ -1092,6 +1125,260 @@ async def webhook_inbound(channel: str, owner_id: str, request: Request):
         return {"ok": True}
 
     return {"ok": True, "channel": channel, "stored": True}
+
+# ---------- Mount ----------
+
+# ---------- Invitations ----------
+class InviteIn(BaseModel):
+    email: EmailStr
+    role: str = "agent"
+
+class InviteAcceptIn(BaseModel):
+    token: str
+    name: str
+    password: str = Field(min_length=6)
+
+@api_router.get("/invitations")
+async def list_invitations(user=Depends(require_permission("users.manage"))):
+    items = await db.invitations.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return items
+
+@api_router.post("/invitations")
+async def create_invitation(payload: InviteIn, user=Depends(require_permission("users.manage"))):
+    valid = list(SYSTEM_ROLES.keys()) + [r["id"] for r in await db.roles.find({}, {"id": 1, "_id": 0}).to_list(200)]
+    if payload.role not in valid:
+        raise HTTPException(400, "Unknown role")
+    if await db.users.find_one({"email": payload.email.lower()}):
+        raise HTTPException(400, "User already exists")
+    token = str(uuid.uuid4())
+    doc = {
+        "id": str(uuid.uuid4()), "token": token,
+        "email": payload.email.lower(), "role": payload.role,
+        "invited_by": user["id"], "status": "pending",
+        "created_at": now_utc_iso(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+    }
+    await db.invitations.insert_one(doc)
+    invite_url = f"{os.environ.get('FRONTEND_URL', '')}/accept-invite?token={token}"
+    cfg = await get_decrypted_integration(user["id"], "resend")
+    sent = False
+    if cfg and cfg.get("api_key"):
+        try:
+            import resend as resend_sdk
+            resend_sdk.api_key = cfg["api_key"]
+            from_email = cfg.get("from_email") or "onboarding@resend.dev"
+            resend_sdk.Emails.send({
+                "from": from_email,
+                "to": [payload.email],
+                "subject": f"You're invited to join {user.get('name','our')} workspace on Pulse/CRM",
+                "html": f"<p>{user.get('name')} invited you to Pulse/CRM as <b>{payload.role}</b>.</p><p><a href='{invite_url}'>Accept invitation</a></p>",
+            })
+            sent = True
+        except Exception:
+            pass
+    doc.pop("_id", None)
+    doc["invite_url"] = invite_url
+    doc["email_sent"] = sent
+    return doc
+
+@api_router.delete("/invitations/{iid}")
+async def delete_invitation(iid: str, user=Depends(require_permission("users.manage"))):
+    await db.invitations.delete_one({"id": iid})
+    return {"ok": True}
+
+@api_router.get("/invitations/check/{token}")
+async def check_invitation(token: str):
+    inv = await db.invitations.find_one({"token": token, "status": "pending"}, {"_id": 0, "token": 0})
+    if not inv:
+        raise HTTPException(404, "Invitation not found")
+    if datetime.fromisoformat(inv["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(400, "Invitation expired")
+    return {"email": inv["email"], "role": inv["role"], "expires_at": inv["expires_at"]}
+
+@api_router.post("/invitations/accept")
+async def accept_invitation(payload: InviteAcceptIn):
+    inv = await db.invitations.find_one({"token": payload.token, "status": "pending"}, {"_id": 0})
+    if not inv:
+        raise HTTPException(404, "Invitation not found or already used")
+    if datetime.fromisoformat(inv["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(400, "Invitation expired")
+    if await db.users.find_one({"email": inv["email"]}):
+        raise HTTPException(400, "User already registered")
+    user_id = str(uuid.uuid4())
+    user_doc = {
+        "id": user_id, "email": inv["email"], "name": payload.name,
+        "password_hash": hash_password(payload.password),
+        "role": inv["role"], "created_at": now_utc_iso(),
+    }
+    await db.users.insert_one(user_doc)
+    await db.invitations.update_one({"id": inv["id"]}, {"$set": {"status": "accepted", "accepted_at": now_utc_iso(), "user_id": user_id}})
+    token = create_token(user_id)
+    user_doc.pop("password_hash", None)
+    user_doc.pop("_id", None)
+    user_doc = await _enrich_user_with_role(user_doc)
+    return TokenOut(token=token, user=user_doc)
+
+# ---------- Helpdesk: SLA, Custom Fields, Canned, Groups, Auto-assign ----------
+class SLAConfigIn(BaseModel):
+    low: dict = {"first_response_minutes": 720, "resolution_minutes": 4320}
+    medium: dict = {"first_response_minutes": 240, "resolution_minutes": 1440}
+    high: dict = {"first_response_minutes": 60, "resolution_minutes": 480}
+    urgent: dict = {"first_response_minutes": 15, "resolution_minutes": 240}
+
+class AssignRuleIn(BaseModel):
+    mode: Literal["off", "round_robin", "channel", "load_balanced"] = "off"
+    eligible_role: str = "agent"
+    channel_map: dict = {}
+
+class HelpdeskConfigIn(BaseModel):
+    sla: Optional[SLAConfigIn] = None
+    assignment: Optional[AssignRuleIn] = None
+
+@api_router.get("/helpdesk/config")
+async def get_helpdesk_config(user=Depends(get_current_user)):
+    cfg = await db.helpdesk_config.find_one({}, {"_id": 0}) or {}
+    if "sla" not in cfg:
+        cfg["sla"] = SLAConfigIn().model_dump()
+    if "assignment" not in cfg:
+        cfg["assignment"] = AssignRuleIn().model_dump()
+    return cfg
+
+@api_router.put("/helpdesk/config")
+async def update_helpdesk_config(payload: HelpdeskConfigIn, user=Depends(require_permission("settings.manage"))):
+    update = {}
+    if payload.sla:
+        update["sla"] = payload.sla.model_dump()
+    if payload.assignment:
+        update["assignment"] = payload.assignment.model_dump()
+    update["updated_at"] = now_utc_iso()
+    await db.helpdesk_config.update_one({}, {"$set": update}, upsert=True)
+    return await db.helpdesk_config.find_one({}, {"_id": 0})
+
+class CustomFieldIn(BaseModel):
+    label: str
+    type: Literal["text", "select", "number", "date", "checkbox"] = "text"
+    options: List[str] = []
+    required: bool = False
+    order: int = 0
+
+@api_router.get("/ticket-fields")
+async def list_ticket_fields(user=Depends(get_current_user)):
+    return await db.ticket_fields.find({}, {"_id": 0}).sort("order", 1).to_list(100)
+
+@api_router.post("/ticket-fields")
+async def create_ticket_field(payload: CustomFieldIn, user=Depends(require_permission("settings.manage"))):
+    key = payload.label.lower().replace(" ", "_") + "_" + uuid.uuid4().hex[:4]
+    doc = {**payload.model_dump(), "id": str(uuid.uuid4()), "key": key, "created_at": now_utc_iso()}
+    await db.ticket_fields.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/ticket-fields/{fid}")
+async def delete_ticket_field(fid: str, user=Depends(require_permission("settings.manage"))):
+    await db.ticket_fields.delete_one({"id": fid})
+    return {"ok": True}
+
+class CannedIn(BaseModel):
+    name: str
+    body: str
+    shortcut: Optional[str] = None
+
+@api_router.get("/canned-responses")
+async def list_canned(user=Depends(get_current_user)):
+    return await db.canned_responses.find({"owner_id": user["id"]}, {"_id": 0}).sort("name", 1).to_list(200)
+
+@api_router.post("/canned-responses")
+async def create_canned(payload: CannedIn, user=Depends(get_current_user)):
+    doc = {**payload.model_dump(), "id": str(uuid.uuid4()), "owner_id": user["id"], "created_at": now_utc_iso()}
+    await db.canned_responses.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/canned-responses/{cid}")
+async def delete_canned(cid: str, user=Depends(get_current_user)):
+    await db.canned_responses.delete_one({"id": cid, "owner_id": user["id"]})
+    return {"ok": True}
+
+class GroupIn(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    member_ids: List[str] = []
+
+@api_router.get("/groups")
+async def list_groups(user=Depends(get_current_user)):
+    return await db.groups.find({}, {"_id": 0}).to_list(200)
+
+@api_router.post("/groups")
+async def create_group(payload: GroupIn, user=Depends(require_permission("settings.manage"))):
+    doc = {**payload.model_dump(), "id": str(uuid.uuid4()), "created_at": now_utc_iso()}
+    await db.groups.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/groups/{gid}")
+async def delete_group(gid: str, user=Depends(require_permission("settings.manage"))):
+    await db.groups.delete_one({"id": gid})
+    return {"ok": True}
+
+# Helpers
+async def _eligible_assignees(role_id: str) -> list:
+    role = await db.roles.find_one({"id": role_id}, {"_id": 0})
+    if not role and role_id in SYSTEM_ROLES:
+        role = SYSTEM_ROLES[role_id]
+    perms = role.get("permissions", []) if role else []
+    if "tickets.write" not in perms:
+        return []
+    return await db.users.find({"role": role_id}, {"_id": 0, "password_hash": 0}).to_list(500)
+
+async def _auto_assign(channel: str = "internal") -> Optional[str]:
+    cfg = await db.helpdesk_config.find_one({}, {"_id": 0}) or {}
+    rule = (cfg.get("assignment") or {})
+    mode = rule.get("mode", "off")
+    if mode == "off":
+        return None
+    if mode == "channel":
+        return (rule.get("channel_map") or {}).get(channel)
+    eligible_role = rule.get("eligible_role", "agent")
+    candidates = await _eligible_assignees(eligible_role)
+    if not candidates:
+        return None
+    if mode == "round_robin":
+        last = rule.get("last_assigned_index", -1)
+        idx = (last + 1) % len(candidates)
+        await db.helpdesk_config.update_one({}, {"$set": {"assignment.last_assigned_index": idx}}, upsert=True)
+        return candidates[idx]["id"]
+    if mode == "load_balanced":
+        counts = []
+        for c in candidates:
+            n = await db.tickets.count_documents({"assignee_id": c["id"], "status": {"$in": ["open", "pending"]}})
+            counts.append((n, c["id"]))
+        counts.sort()
+        return counts[0][1] if counts else None
+    return None
+
+def _sla_due_dates(priority: str, sla_cfg: dict) -> dict:
+    p = (sla_cfg or {}).get(priority) or {"first_response_minutes": 240, "resolution_minutes": 1440}
+    now = datetime.now(timezone.utc)
+    return {
+        "first_response_due_at": (now + timedelta(minutes=p["first_response_minutes"])).isoformat(),
+        "resolution_due_at": (now + timedelta(minutes=p["resolution_minutes"])).isoformat(),
+    }
+
+class TicketAssignIn(BaseModel):
+    assignee_id: Optional[str] = None
+    group_id: Optional[str] = None
+
+@api_router.patch("/tickets/{tid}/assign")
+async def assign_ticket(tid: str, payload: TicketAssignIn, user=Depends(require_permission("tickets.write"))):
+    update = {"updated_at": now_utc_iso()}
+    if "assignee_id" in payload.model_fields_set:
+        update["assignee_id"] = payload.assignee_id
+    if "group_id" in payload.model_fields_set:
+        update["group_id"] = payload.group_id
+    res = await db.tickets.update_one({"id": tid}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return await db.tickets.find_one({"id": tid}, {"_id": 0})
 
 # ---------- Mount ----------
 app.include_router(api_router)

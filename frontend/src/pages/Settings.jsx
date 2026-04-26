@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { toast } from "sonner";
-import { Mail, MessageCircle, Phone, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check, X, ShieldCheck, Key, Webhook, Copy } from "lucide-react";
+import { Mail, MessageCircle, Phone, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check, X, ShieldCheck, Key, Webhook, Copy, LifeBuoy, UserPlus, Send } from "lucide-react";
 
 const TABS = [
     { id: "integrations", label: "Integrations", icon: Key },
     { id: "roles", label: "Roles & Permissions", icon: Shield },
     { id: "team", label: "Team", icon: UsersIcon },
+    { id: "helpdesk", label: "Helpdesk", icon: LifeBuoy },
     { id: "webhooks", label: "Webhooks", icon: Webhook },
 ];
 
@@ -53,6 +54,7 @@ const Settings = () => {
             {tab === "integrations" && <IntegrationsTab />}
             {tab === "roles" && <RolesTab />}
             {tab === "team" && <TeamTab />}
+            {tab === "helpdesk" && <HelpdeskTab />}
             {tab === "webhooks" && <WebhooksTab user={user} />}
         </div>
     );
@@ -340,11 +342,14 @@ const RolesTab = () => {
 const TeamTab = () => {
     const [users, setUsers] = useState([]);
     const [roles, setRoles] = useState([]);
+    const [invites, setInvites] = useState([]);
+    const [inviteEmail, setInviteEmail] = useState("");
+    const [inviteRole, setInviteRole] = useState("agent");
 
     const load = async () => {
         try {
-            const [u, r] = await Promise.all([api.get("/users"), api.get("/roles")]);
-            setUsers(u.data); setRoles(r.data);
+            const [u, r, i] = await Promise.all([api.get("/users"), api.get("/roles"), api.get("/invitations")]);
+            setUsers(u.data); setRoles(r.data); setInvites(i.data);
         } catch (err) {
             toast.error(err.response?.data?.detail || "Failed to load");
         }
@@ -361,10 +366,52 @@ const TeamTab = () => {
         }
     };
 
+    const sendInvite = async (e) => {
+        e.preventDefault();
+        try {
+            const { data } = await api.post("/invitations", { email: inviteEmail, role: inviteRole });
+            const linkPath = data.invite_url || `/accept-invite?token=${data.token}`;
+            const fullUrl = linkPath.startsWith("http") ? linkPath : window.location.origin + linkPath;
+            navigator.clipboard.writeText(fullUrl);
+            toast.success(data.email_sent ? `Invite emailed + link copied` : `Invite link copied (Resend not configured)`);
+            setInviteEmail("");
+            load();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || "Invite failed");
+        }
+    };
+
+    const revokeInvite = async (id) => {
+        await api.delete(`/invitations/${id}`);
+        load();
+    };
+
+    const copyInvite = (inv) => {
+        const link = (inv.invite_url || `/accept-invite?token=${inv.token}`);
+        const url = link.startsWith("http") ? link : window.location.origin + link;
+        navigator.clipboard.writeText(url);
+        toast.success("Link copied");
+    };
+
     return (
         <div data-testid="team-section">
+            {/* Invite */}
+            <div className="bg-white border-2 border-ink p-5 mb-6" data-testid="invite-section">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3 flex items-center gap-2"><UserPlus className="w-5 h-5 text-brand" /> Invite teammate</h2>
+                <form onSubmit={sendInvite} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <input data-testid="invite-email-input" required type="email" placeholder="email@company.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} className="md:col-span-2 bg-bg border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm" />
+                    <div className="flex gap-2">
+                        <select data-testid="invite-role-select" value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className="flex-1 bg-bg border-2 border-ink px-3 py-2 outline-none focus:border-brand text-xs font-bold uppercase tracking-widest">
+                            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        </select>
+                        <button data-testid="invite-send-btn" type="submit" className="bg-brand text-white px-4 text-xs font-bold uppercase tracking-widest hover:bg-ink flex items-center gap-1"><Send className="w-3 h-3" /> Invite</button>
+                    </div>
+                </form>
+                <p className="text-[11px] font-mono uppercase tracking-widest text-inkSecondary mt-2">Sends email if Resend configured, else link is copied to clipboard.</p>
+            </div>
+
             <h2 className="font-heading font-black text-2xl tracking-tighter mb-4">Team members ({users.length})</h2>
-            <div className="bg-white border-2 border-ink overflow-x-auto">
+            <div className="bg-white border-2 border-ink overflow-x-auto mb-6">
                 <table className="w-full text-sm">
                     <thead>
                         <tr className="border-b-2 border-ink">
@@ -387,8 +434,231 @@ const TeamTab = () => {
                     </tbody>
                 </table>
             </div>
-            <div className="mt-4 bg-bg border-l-2 border-brand p-3 text-xs text-inkSecondary">
-                <span className="font-bold text-ink">Tip:</span> have new teammates register at <span className="font-mono">/auth</span>, then assign their role here. Email-invite flow coming soon.
+
+            {invites.filter(i => i.status === "pending").length > 0 && (
+                <>
+                    <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Pending invites ({invites.filter(i => i.status === "pending").length})</h2>
+                    <div className="bg-white border-2 border-ink">
+                        {invites.filter(i => i.status === "pending").map((inv) => (
+                            <div key={inv.id} data-testid={`invite-row-${inv.id}`} className="flex items-center gap-3 px-4 py-3 border-b border-line last:border-b-0">
+                                <div className="flex-1">
+                                    <div className="font-bold text-sm">{inv.email}</div>
+                                    <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary">role: {inv.role} · expires {inv.expires_at?.slice(0, 10)}</div>
+                                </div>
+                                <button data-testid={`invite-copy-${inv.id}`} onClick={() => copyInvite(inv)} className="border-2 border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white">Copy link</button>
+                                <button data-testid={`invite-revoke-${inv.id}`} onClick={() => revokeInvite(inv.id)} className="border-2 border-ink px-2 py-1 hover:bg-bad hover:text-white hover:border-bad"><Trash2 className="w-3 h-3" /></button>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
+// ---------- Helpdesk Tab ----------
+const HelpdeskTab = () => {
+    const [config, setConfig] = useState(null);
+    const [fields, setFields] = useState([]);
+    const [canned, setCanned] = useState([]);
+    const [groups, setGroups] = useState([]);
+    const [users, setUsers] = useState([]);
+    const [roles, setRoles] = useState([]);
+    const [newField, setNewField] = useState({ label: "", type: "text", options: "", required: false });
+    const [newCanned, setNewCanned] = useState({ name: "", body: "", shortcut: "" });
+    const [newGroup, setNewGroup] = useState({ name: "", description: "", member_ids: [] });
+
+    const load = async () => {
+        try {
+            const [c, f, cn, g, u, r] = await Promise.all([
+                api.get("/helpdesk/config"), api.get("/ticket-fields"),
+                api.get("/canned-responses"), api.get("/groups"),
+                api.get("/users").catch(() => ({ data: [] })),
+                api.get("/roles"),
+            ]);
+            setConfig(c.data); setFields(f.data); setCanned(cn.data); setGroups(g.data); setUsers(u.data); setRoles(r.data);
+        } catch (err) { toast.error("Load failed"); }
+    };
+    useEffect(() => { load(); }, []);
+
+    if (!config) return <div className="font-mono text-sm">LOADING…</div>;
+
+    const updateConfig = async (patch) => {
+        try {
+            const updated = { ...config, ...patch };
+            await api.put("/helpdesk/config", patch);
+            setConfig(updated);
+            toast.success("Saved");
+        } catch (err) { toast.error("Save failed"); }
+    };
+
+    const addField = async (e) => {
+        e.preventDefault();
+        try {
+            await api.post("/ticket-fields", {
+                label: newField.label, type: newField.type, required: newField.required,
+                options: newField.type === "select" ? newField.options.split(",").map(s => s.trim()).filter(Boolean) : [],
+            });
+            setNewField({ label: "", type: "text", options: "", required: false });
+            toast.success("Field added");
+            load();
+        } catch (err) { toast.error("Add failed"); }
+    };
+
+    const delField = async (id) => { await api.delete(`/ticket-fields/${id}`); load(); };
+
+    const addCanned = async (e) => {
+        e.preventDefault();
+        try {
+            await api.post("/canned-responses", newCanned);
+            setNewCanned({ name: "", body: "", shortcut: "" });
+            toast.success("Canned response added");
+            load();
+        } catch (err) { toast.error("Add failed"); }
+    };
+
+    const delCanned = async (id) => { await api.delete(`/canned-responses/${id}`); load(); };
+
+    const addGroup = async (e) => {
+        e.preventDefault();
+        try {
+            await api.post("/groups", newGroup);
+            setNewGroup({ name: "", description: "", member_ids: [] });
+            toast.success("Group created");
+            load();
+        } catch (err) { toast.error("Create failed"); }
+    };
+
+    const delGroup = async (id) => { await api.delete(`/groups/${id}`); load(); };
+
+    const PRIORITIES = ["low", "medium", "high", "urgent"];
+
+    return (
+        <div className="space-y-6" data-testid="helpdesk-section">
+            {/* Auto-assign */}
+            <div className="bg-white border-2 border-ink p-5">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Auto-assignment</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Mode</label>
+                        <select data-testid="assign-mode" value={config.assignment.mode} onChange={(e) => updateConfig({ assignment: { ...config.assignment, mode: e.target.value } })} className="w-full bg-bg border-2 border-ink px-3 py-2 outline-none text-sm font-bold uppercase tracking-widest">
+                            {["off", "round_robin", "load_balanced", "channel"].map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Eligible role</label>
+                        <select data-testid="assign-role" value={config.assignment.eligible_role} onChange={(e) => updateConfig({ assignment: { ...config.assignment, eligible_role: e.target.value } })} className="w-full bg-bg border-2 border-ink px-3 py-2 outline-none text-sm font-bold uppercase tracking-widest">
+                            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        </select>
+                    </div>
+                </div>
+                {config.assignment.mode === "channel" && (
+                    <div className="mt-4 bg-bg border-l-2 border-brand p-3">
+                        <div className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary mb-2">Channel routing</div>
+                        {["whatsapp", "email", "portal", "chat", "call"].map((ch) => (
+                            <div key={ch} className="grid grid-cols-2 gap-2 mb-2">
+                                <span className="text-xs font-mono uppercase tracking-widest self-center">{ch}</span>
+                                <select data-testid={`channel-map-${ch}`} value={(config.assignment.channel_map || {})[ch] || ""} onChange={(e) => updateConfig({ assignment: { ...config.assignment, channel_map: { ...(config.assignment.channel_map || {}), [ch]: e.target.value } } })} className="bg-white border-2 border-ink px-2 py-1 text-xs">
+                                    <option value="">— unassigned —</option>
+                                    {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                                </select>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* SLA */}
+            <div className="bg-white border-2 border-ink p-5">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">SLA targets (minutes)</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {PRIORITIES.map((p) => (
+                        <div key={p} className="bg-bg border-2 border-ink p-3">
+                            <div className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary mb-2">{p}</div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input data-testid={`sla-${p}-fr`} type="number" min={0} value={config.sla[p].first_response_minutes} onChange={(e) => updateConfig({ sla: { ...config.sla, [p]: { ...config.sla[p], first_response_minutes: parseInt(e.target.value) || 0 } } })} className="bg-white border-2 border-ink px-2 py-1 text-xs" />
+                                <input data-testid={`sla-${p}-res`} type="number" min={0} value={config.sla[p].resolution_minutes} onChange={(e) => updateConfig({ sla: { ...config.sla, [p]: { ...config.sla[p], resolution_minutes: parseInt(e.target.value) || 0 } } })} className="bg-white border-2 border-ink px-2 py-1 text-xs" />
+                            </div>
+                            <div className="grid grid-cols-2 text-[10px] font-mono text-inkSecondary mt-1"><span>1st response</span><span>resolve</span></div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Custom Fields */}
+            <div className="bg-white border-2 border-ink p-5">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Ticket custom fields</h2>
+                <form onSubmit={addField} className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-4" data-testid="field-form">
+                    <input data-testid="field-label" required placeholder="Label" value={newField.label} onChange={(e) => setNewField({ ...newField, label: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs" />
+                    <select data-testid="field-type" value={newField.type} onChange={(e) => setNewField({ ...newField, type: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs uppercase">
+                        {["text", "select", "number", "date", "checkbox"].map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    {newField.type === "select" && <input data-testid="field-options" placeholder="opt1, opt2, opt3" value={newField.options} onChange={(e) => setNewField({ ...newField, options: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs" />}
+                    <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={newField.required} onChange={(e) => setNewField({ ...newField, required: e.target.checked })} className="accent-brand" /> required</label>
+                    <button data-testid="field-add" type="submit" className="bg-brand text-white px-3 text-xs font-bold uppercase tracking-widest hover:bg-ink">Add</button>
+                </form>
+                <div className="space-y-2">
+                    {fields.map((f) => (
+                        <div key={f.id} data-testid={`field-row-${f.id}`} className="flex items-center gap-3 bg-bg border border-ink px-3 py-2">
+                            <span className="font-mono text-xs uppercase tracking-widest text-ink">{f.type}</span>
+                            <span className="flex-1 font-bold text-sm">{f.label}</span>
+                            {f.required && <span className="text-[10px] font-mono uppercase tracking-widest text-bad">required</span>}
+                            {f.type === "select" && <span className="text-[10px] font-mono text-inkSecondary truncate">[{(f.options || []).join(", ")}]</span>}
+                            <button data-testid={`field-delete-${f.id}`} onClick={() => delField(f.id)} className="text-inkSecondary hover:text-bad"><Trash2 className="w-3 h-3" /></button>
+                        </div>
+                    ))}
+                    {fields.length === 0 && <div className="text-xs text-inkSecondary">No custom fields yet.</div>}
+                </div>
+            </div>
+
+            {/* Canned Responses */}
+            <div className="bg-white border-2 border-ink p-5">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Canned responses</h2>
+                <form onSubmit={addCanned} className="space-y-2 mb-4" data-testid="canned-form">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <input data-testid="canned-name" required placeholder="Name (e.g. Greeting)" value={newCanned.name} onChange={(e) => setNewCanned({ ...newCanned, name: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs" />
+                        <input data-testid="canned-shortcut" placeholder="Shortcut /greet" value={newCanned.shortcut} onChange={(e) => setNewCanned({ ...newCanned, shortcut: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs font-mono" />
+                        <button data-testid="canned-add" type="submit" className="bg-brand text-white px-3 text-xs font-bold uppercase tracking-widest hover:bg-ink">Add</button>
+                    </div>
+                    <textarea data-testid="canned-body" required placeholder="Response body…" rows={2} value={newCanned.body} onChange={(e) => setNewCanned({ ...newCanned, body: e.target.value })} className="w-full bg-bg border-2 border-ink px-2 py-1.5 text-xs resize-none" />
+                </form>
+                <div className="space-y-2">
+                    {canned.map((c) => (
+                        <div key={c.id} data-testid={`canned-row-${c.id}`} className="bg-bg border border-ink px-3 py-2">
+                            <div className="flex justify-between items-start gap-2">
+                                <div className="flex-1">
+                                    <span className="font-bold text-sm">{c.name}</span>
+                                    {c.shortcut && <span className="ml-2 font-mono text-[10px] text-brand">{c.shortcut}</span>}
+                                    <div className="text-xs text-inkSecondary mt-1 line-clamp-2">{c.body}</div>
+                                </div>
+                                <button data-testid={`canned-delete-${c.id}`} onClick={() => delCanned(c.id)} className="text-inkSecondary hover:text-bad"><Trash2 className="w-3 h-3" /></button>
+                            </div>
+                        </div>
+                    ))}
+                    {canned.length === 0 && <div className="text-xs text-inkSecondary">No canned responses yet.</div>}
+                </div>
+            </div>
+
+            {/* Groups */}
+            <div className="bg-white border-2 border-ink p-5">
+                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Groups / Departments</h2>
+                <form onSubmit={addGroup} className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4" data-testid="group-form">
+                    <input data-testid="group-name" required placeholder="Name (e.g. Sales)" value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs" />
+                    <input data-testid="group-desc" placeholder="Description" value={newGroup.description} onChange={(e) => setNewGroup({ ...newGroup, description: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs" />
+                    <button data-testid="group-add" type="submit" className="bg-brand text-white px-3 text-xs font-bold uppercase tracking-widest hover:bg-ink">Add</button>
+                </form>
+                <div className="space-y-2">
+                    {groups.map((g) => (
+                        <div key={g.id} data-testid={`group-row-${g.id}`} className="bg-bg border border-ink px-3 py-2 flex items-center justify-between">
+                            <div>
+                                <div className="font-bold text-sm">{g.name}</div>
+                                <div className="text-xs text-inkSecondary">{g.description}</div>
+                            </div>
+                            <button data-testid={`group-delete-${g.id}`} onClick={() => delGroup(g.id)} className="text-inkSecondary hover:text-bad"><Trash2 className="w-3 h-3" /></button>
+                        </div>
+                    ))}
+                    {groups.length === 0 && <div className="text-xs text-inkSecondary">No groups yet.</div>}
+                </div>
             </div>
         </div>
     );

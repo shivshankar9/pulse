@@ -14,6 +14,7 @@ import Tickets from "./pages/Tickets";
 import Channels from "./pages/Channels";
 import Settings from "./pages/Settings";
 import PublicSupport from "./pages/PublicSupport";
+import AcceptInvite from "./pages/AcceptInvite";
 import "./App.css";
 
 const Protected = ({ children }) => {
@@ -32,6 +33,7 @@ function App() {
                     <Route path="/" element={<Landing />} />
                     <Route path="/auth" element={<Auth />} />
                     <Route path="/support" element={<PublicSupport />} />
+                    <Route path="/accept-invite" element={<AcceptInvite />} />
                     <Route element={<Protected><AppShell /></Protected>}>
                         <Route path="/app" element={<Dashboard />} />
                         <Route path="/app/contacts" element={<Contacts />} />
