@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio } from "lucide-react";
+import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio, Settings as SettingsIcon } from "lucide-react";
 
 const navItems = [
     { to: "/app", label: "Dashboard", icon: LayoutGrid, end: true, testid: "nav-dashboard" },
@@ -11,6 +11,7 @@ const navItems = [
     { to: "/app/tickets", label: "Tickets", icon: LifeBuoy, testid: "nav-tickets" },
     { to: "/app/channels", label: "Channels", icon: Radio, testid: "nav-channels" },
     { to: "/app/assistant", label: "AI Assistant", icon: Sparkles, testid: "nav-assistant" },
+    { to: "/app/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings", perm: "settings.manage" },
 ];
 
 const AppShell = () => {
@@ -28,24 +29,27 @@ const AppShell = () => {
                     <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary mt-1">v1.0 / operator</div>
                 </div>
                 <nav className="flex-1 p-3 space-y-1">
-                    {navItems.map(({ to, label, icon: Icon, end, testid }) => (
-                        <NavLink
-                            key={to}
-                            to={to}
-                            end={end}
-                            data-testid={testid}
-                            className={({ isActive }) =>
-                                `flex items-center gap-3 px-3 py-2.5 text-sm font-bold uppercase tracking-wider border-l-2 transition-all ${
-                                    isActive
-                                        ? "bg-bg border-brand text-ink"
-                                        : "border-transparent text-inkSecondary hover:text-ink hover:bg-bg"
-                                }`
-                            }
-                        >
-                            <Icon className="w-4 h-4" strokeWidth={2.5} />
-                            <span className="text-xs">{label}</span>
-                        </NavLink>
-                    ))}
+                    {navItems.map(({ to, label, icon: Icon, end, testid, perm }) => {
+                        if (perm && !(user?.permissions || []).includes(perm)) return null;
+                        return (
+                            <NavLink
+                                key={to}
+                                to={to}
+                                end={end}
+                                data-testid={testid}
+                                className={({ isActive }) =>
+                                    `flex items-center gap-3 px-3 py-2.5 text-sm font-bold uppercase tracking-wider border-l-2 transition-all ${
+                                        isActive
+                                            ? "bg-bg border-brand text-ink"
+                                            : "border-transparent text-inkSecondary hover:text-ink hover:bg-bg"
+                                    }`
+                                }
+                            >
+                                <Icon className="w-4 h-4" strokeWidth={2.5} />
+                                <span className="text-xs">{label}</span>
+                            </NavLink>
+                        );
+                    })}
                 </nav>
                 <div className="border-t-2 border-ink p-4">
                     <div className="flex items-center gap-3 mb-3">
@@ -55,6 +59,7 @@ const AppShell = () => {
                         <div className="flex-1 min-w-0">
                             <div className="text-xs font-bold truncate" data-testid="user-name">{user?.name}</div>
                             <div className="text-[10px] font-mono text-inkSecondary truncate">{user?.email}</div>
+                            {user?.role_label && <div className="text-[9px] font-mono uppercase tracking-widest text-brand mt-0.5" data-testid="user-role">● {user.role_label}</div>}
                         </div>
                     </div>
                     <button

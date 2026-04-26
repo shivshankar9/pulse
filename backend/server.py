@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import csv
 import io
@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+from cryptography.fernet import Fernet
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
@@ -27,6 +28,42 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret')
 JWT_ALG = "HS256"
 JWT_EXP_DAYS = 7
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+INTEGRATIONS_KEY = os.environ.get('INTEGRATIONS_KEY')
+fernet = Fernet(INTEGRATIONS_KEY.encode()) if INTEGRATIONS_KEY else None
+
+def encrypt_secret(value: str) -> str:
+    if not fernet or not value:
+        return value
+    return fernet.encrypt(value.encode()).decode()
+
+def decrypt_secret(value: str) -> str:
+    if not fernet or not value:
+        return value
+    try:
+        return fernet.decrypt(value.encode()).decode()
+    except Exception:
+        return ""
+
+# ---------- RBAC ----------
+ALL_PERMISSIONS = [
+    "contacts.read", "contacts.write", "contacts.delete",
+    "deals.read", "deals.write", "deals.delete",
+    "activities.read", "activities.write", "activities.delete",
+    "emails.read", "emails.write",
+    "tickets.read", "tickets.write", "tickets.delete",
+    "channels.manage",
+    "ai.use",
+    "settings.manage",
+    "roles.manage",
+    "users.manage",
+]
+
+SYSTEM_ROLES = {
+    "admin": {"name": "Admin", "description": "Full access. Manages users, roles, integrations.", "permissions": ALL_PERMISSIONS, "system": True},
+    "manager": {"name": "Manager", "description": "Manages CRM data, AI, channels. Cannot edit roles.", "permissions": [p for p in ALL_PERMISSIONS if p not in ("roles.manage", "users.manage")], "system": True},
+    "agent": {"name": "Agent", "description": "Day-to-day sales/support. Read+write CRM, no delete or settings.", "permissions": ["contacts.read", "contacts.write", "deals.read", "deals.write", "activities.read", "activities.write", "emails.read", "emails.write", "tickets.read", "tickets.write", "ai.use"], "system": True},
+    "viewer": {"name": "Viewer", "description": "Read-only access.", "permissions": ["contacts.read", "deals.read", "activities.read", "emails.read", "tickets.read"], "system": True},
+}
 
 app = FastAPI(title="Pulse CRM API")
 api_router = APIRouter(prefix="/api")
@@ -64,7 +101,21 @@ async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depen
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    # Resolve permissions from role
+    role_id = user.get("role", "admin")
+    role = await db.roles.find_one({"id": role_id}, {"_id": 0})
+    if not role and role_id in SYSTEM_ROLES:
+        role = {"id": role_id, **SYSTEM_ROLES[role_id]}
+    user["permissions"] = role.get("permissions", []) if role else []
+    user["role_label"] = role.get("name") if role else "Admin"
     return user
+
+def require_permission(permission: str):
+    async def checker(user=Depends(get_current_user)):
+        if permission not in user.get("permissions", []):
+            raise HTTPException(status_code=403, detail=f"Missing permission: {permission}")
+        return user
+    return checker
 
 # ---------- Models ----------
 class RegisterIn(BaseModel):
@@ -149,6 +200,15 @@ class AINextActionIn(BaseModel):
     deal_id: Optional[str] = None
 
 # ---------- Auth ----------
+async def _enrich_user_with_role(user_doc):
+    role_id = user_doc.get("role", "admin")
+    role = await db.roles.find_one({"id": role_id}, {"_id": 0})
+    if not role and role_id in SYSTEM_ROLES:
+        role = SYSTEM_ROLES[role_id]
+    user_doc["permissions"] = role.get("permissions", []) if role else []
+    user_doc["role_label"] = role.get("name") if role else "Admin"
+    return user_doc
+
 @api_router.post("/auth/register", response_model=TokenOut)
 async def register(payload: RegisterIn):
     existing = await db.users.find_one({"email": payload.email.lower()})
@@ -160,12 +220,14 @@ async def register(payload: RegisterIn):
         "email": payload.email.lower(),
         "name": payload.name,
         "password_hash": hash_password(payload.password),
+        "role": "admin",
         "created_at": now_utc_iso(),
     }
     await db.users.insert_one(user_doc)
     token = create_token(user_id)
     user_doc.pop("password_hash", None)
     user_doc.pop("_id", None)
+    user_doc = await _enrich_user_with_role(user_doc)
     return TokenOut(token=token, user=user_doc)
 
 @api_router.post("/auth/login", response_model=TokenOut)
@@ -176,6 +238,7 @@ async def login(payload: LoginIn):
     token = create_token(user["id"])
     user.pop("password_hash", None)
     user.pop("_id", None)
+    user = await _enrich_user_with_role(user)
     return TokenOut(token=token, user=user)
 
 @api_router.get("/auth/me")
@@ -311,12 +374,35 @@ async def list_emails(user=Depends(get_current_user)):
 @api_router.post("/emails")
 async def log_email(payload: EmailIn, user=Depends(get_current_user)):
     eid = str(uuid.uuid4())
+    cfg = await get_decrypted_integration(user["id"], "resend")
+    sent_via = "log"
+    resend_id = None
+    error = None
+    if cfg and cfg.get("api_key"):
+        try:
+            import resend as resend_sdk
+            resend_sdk.api_key = cfg["api_key"]
+            from_email = cfg.get("from_email") or f"{user.get('name','sender').lower().replace(' ','.')}@onboarding.resend.dev"
+            r = resend_sdk.Emails.send({
+                "from": from_email,
+                "to": [payload.to],
+                "subject": payload.subject,
+                "html": payload.body.replace("\n", "<br/>"),
+            })
+            resend_id = (r or {}).get("id") if isinstance(r, dict) else getattr(r, "id", None)
+            sent_via = "resend"
+        except Exception as e:
+            error = str(e)
+            sent_via = "log_failed"
     doc = {
         **payload.model_dump(),
         "id": eid,
         "owner_id": user["id"],
         "sent_at": now_utc_iso(),
         "opened": False,
+        "sent_via": sent_via,
+        "resend_id": resend_id,
+        "error": error,
     }
     await db.emails.insert_one(doc)
     doc.pop("_id", None)
@@ -685,6 +771,327 @@ async def upsert_channel(payload: ChannelConfigIn, user=Depends(get_current_user
             "updated_at": now_utc_iso(),
         })
     return await db.channels.find_one({"owner_id": user["id"], "channel": payload.channel}, {"_id": 0})
+
+# ---------- Mount ----------
+
+# ---------- Roles ----------
+class RoleIn(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    permissions: List[str] = []
+
+@api_router.get("/roles")
+async def list_roles(user=Depends(get_current_user)):
+    custom = await db.roles.find({}, {"_id": 0}).to_list(200)
+    custom_ids = {r["id"] for r in custom}
+    items = []
+    for rid, base in SYSTEM_ROLES.items():
+        if rid not in custom_ids:
+            items.append({"id": rid, **base})
+    items.extend(custom)
+    return items
+
+@api_router.post("/roles")
+async def create_role(payload: RoleIn, user=Depends(require_permission("roles.manage"))):
+    invalid = [p for p in payload.permissions if p not in ALL_PERMISSIONS]
+    if invalid:
+        raise HTTPException(400, f"Unknown permissions: {invalid}")
+    rid = payload.name.lower().replace(" ", "_")
+    if rid in SYSTEM_ROLES:
+        raise HTTPException(400, "Cannot use a system role id")
+    if await db.roles.find_one({"id": rid}):
+        raise HTTPException(400, "Role already exists")
+    doc = {
+        "id": rid, "name": payload.name, "description": payload.description,
+        "permissions": payload.permissions, "system": False,
+        "created_at": now_utc_iso(),
+    }
+    await db.roles.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/roles/{rid}")
+async def update_role(rid: str, payload: RoleIn, user=Depends(require_permission("roles.manage"))):
+    if rid in SYSTEM_ROLES:
+        raise HTTPException(400, "System roles are read-only")
+    invalid = [p for p in payload.permissions if p not in ALL_PERMISSIONS]
+    if invalid:
+        raise HTTPException(400, f"Unknown permissions: {invalid}")
+    res = await db.roles.update_one({"id": rid}, {"$set": {"name": payload.name, "description": payload.description, "permissions": payload.permissions, "updated_at": now_utc_iso()}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return await db.roles.find_one({"id": rid}, {"_id": 0})
+
+@api_router.delete("/roles/{rid}")
+async def delete_role(rid: str, user=Depends(require_permission("roles.manage"))):
+    if rid in SYSTEM_ROLES:
+        raise HTTPException(400, "System roles cannot be deleted")
+    in_use = await db.users.count_documents({"role": rid})
+    if in_use > 0:
+        raise HTTPException(400, f"Role assigned to {in_use} user(s)")
+    await db.roles.delete_one({"id": rid})
+    return {"ok": True}
+
+@api_router.get("/permissions")
+async def list_permissions(user=Depends(get_current_user)):
+    return ALL_PERMISSIONS
+
+# ---------- Users management ----------
+class UserRoleUpdateIn(BaseModel):
+    role: str
+
+@api_router.get("/users")
+async def list_users(user=Depends(require_permission("users.manage"))):
+    items = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    return items
+
+@api_router.patch("/users/{uid}/role")
+async def update_user_role(uid: str, payload: UserRoleUpdateIn, user=Depends(require_permission("users.manage"))):
+    valid = list(SYSTEM_ROLES.keys()) + [r["id"] for r in await db.roles.find({}, {"id": 1, "_id": 0}).to_list(200)]
+    if payload.role not in valid:
+        raise HTTPException(400, "Unknown role")
+    res = await db.users.update_one({"id": uid}, {"$set": {"role": payload.role}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    u = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    return u
+
+# ---------- Integrations (per-user secret vault) ----------
+class IntegrationIn(BaseModel):
+    config: dict  # plaintext keys; will be encrypted
+
+PROVIDER_KEYS = {
+    "resend": ["api_key", "from_email"],
+    "twilio": ["account_sid", "auth_token", "whatsapp_number", "voice_number"],
+    "google": ["client_id", "client_secret", "refresh_token", "calendar_id"],
+}
+
+def mask(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    return "•" * max(0, len(s) - 4) + s[-4:]
+
+@api_router.get("/integrations")
+async def list_integrations(user=Depends(get_current_user)):
+    items = await db.integrations.find({"owner_id": user["id"]}, {"_id": 0}).to_list(20)
+    out = {}
+    for it in items:
+        cfg = it.get("config", {})
+        masked = {k: mask(decrypt_secret(v)) for k, v in cfg.items()}
+        out[it["provider"]] = {
+            "configured": True,
+            "config_masked": masked,
+            "updated_at": it.get("updated_at"),
+        }
+    for p in PROVIDER_KEYS:
+        if p not in out:
+            out[p] = {"configured": False, "config_masked": {}}
+    return out
+
+@api_router.put("/integrations/{provider}")
+async def upsert_integration(provider: str, payload: IntegrationIn, user=Depends(require_permission("settings.manage"))):
+    if provider not in PROVIDER_KEYS:
+        raise HTTPException(400, "Unknown provider")
+    encrypted = {}
+    for k, v in payload.config.items():
+        if k in PROVIDER_KEYS[provider] and v:
+            encrypted[k] = encrypt_secret(str(v))
+    doc = {
+        "owner_id": user["id"],
+        "provider": provider,
+        "config": encrypted,
+        "updated_at": now_utc_iso(),
+    }
+    await db.integrations.update_one(
+        {"owner_id": user["id"], "provider": provider},
+        {"$set": doc, "$setOnInsert": {"id": str(uuid.uuid4()), "created_at": now_utc_iso()}},
+        upsert=True,
+    )
+    return {"ok": True, "provider": provider}
+
+@api_router.delete("/integrations/{provider}")
+async def delete_integration(provider: str, user=Depends(require_permission("settings.manage"))):
+    await db.integrations.delete_one({"owner_id": user["id"], "provider": provider})
+    return {"ok": True}
+
+async def get_decrypted_integration(owner_id: str, provider: str) -> Optional[dict]:
+    it = await db.integrations.find_one({"owner_id": owner_id, "provider": provider}, {"_id": 0})
+    if not it:
+        return None
+    return {k: decrypt_secret(v) for k, v in it.get("config", {}).items()}
+
+@api_router.post("/integrations/{provider}/test")
+async def test_integration(provider: str, user=Depends(require_permission("settings.manage"))):
+    cfg = await get_decrypted_integration(user["id"], provider)
+    if not cfg:
+        raise HTTPException(400, "Provider not configured")
+    if provider == "resend":
+        try:
+            import resend as resend_sdk
+            resend_sdk.api_key = cfg.get("api_key")
+            # Use API key to fetch domains (lightweight verify)
+            import requests
+            r = requests.get("https://api.resend.com/domains", headers={"Authorization": f"Bearer {cfg.get('api_key')}"}, timeout=10)
+            if r.status_code == 401:
+                raise HTTPException(400, "Invalid Resend API key")
+            return {"ok": True, "provider": "resend", "info": r.json() if r.status_code == 200 else {"status": r.status_code}}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"Resend test failed: {str(e)}")
+    if provider == "twilio":
+        try:
+            from twilio.rest import Client as TwClient
+            tw = TwClient(cfg.get("account_sid"), cfg.get("auth_token"))
+            acc = tw.api.accounts(cfg.get("account_sid")).fetch()
+            return {"ok": True, "provider": "twilio", "account_status": acc.status, "friendly_name": acc.friendly_name}
+        except Exception as e:
+            raise HTTPException(400, f"Twilio test failed: {str(e)}")
+    if provider == "google":
+        # Without performing OAuth flow we just confirm presence
+        return {"ok": bool(cfg.get("client_id") and cfg.get("client_secret")), "provider": "google", "note": "OAuth flow setup required to fully connect"}
+    raise HTTPException(400, "Unknown provider")
+
+# ---------- WhatsApp / Voice via Twilio ----------
+class WhatsAppSendIn(BaseModel):
+    to: str  # E.164 like +15551234567
+    body: str
+    contact_id: Optional[str] = None
+
+@api_router.post("/whatsapp/send")
+async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission("tickets.write"))):
+    cfg = await get_decrypted_integration(user["id"], "twilio")
+    if not cfg or not cfg.get("whatsapp_number"):
+        raise HTTPException(400, "Twilio WhatsApp not configured")
+    try:
+        from twilio.rest import Client as TwClient
+        tw = TwClient(cfg["account_sid"], cfg["auth_token"])
+        msg = tw.messages.create(
+            from_=f"whatsapp:{cfg['whatsapp_number']}",
+            to=f"whatsapp:{payload.to}",
+            body=payload.body,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Twilio send failed: {str(e)}")
+    doc = {
+        "id": str(uuid.uuid4()), "owner_id": user["id"],
+        "channel": "whatsapp", "direction": "outbound",
+        "to": payload.to, "from": cfg["whatsapp_number"],
+        "body": payload.body, "sid": msg.sid, "status": msg.status,
+        "contact_id": payload.contact_id, "sent_at": now_utc_iso(),
+    }
+    await db.messages.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/whatsapp/messages")
+async def whatsapp_list(user=Depends(get_current_user)):
+    items = await db.messages.find({"owner_id": user["id"], "channel": "whatsapp"}, {"_id": 0}).sort("sent_at", -1).to_list(500)
+    return items
+
+class VoiceCallIn(BaseModel):
+    to: str
+    contact_id: Optional[str] = None
+    twiml_url: Optional[str] = None
+
+@api_router.post("/voice/call")
+async def voice_call(payload: VoiceCallIn, user=Depends(require_permission("activities.write"))):
+    cfg = await get_decrypted_integration(user["id"], "twilio")
+    if not cfg or not cfg.get("voice_number"):
+        raise HTTPException(400, "Twilio Voice not configured")
+    try:
+        from twilio.rest import Client as TwClient
+        tw = TwClient(cfg["account_sid"], cfg["auth_token"])
+        # Default TwiML - simple announce, can be replaced by user-supplied URL
+        twiml_url = payload.twiml_url or "http://demo.twilio.com/docs/voice.xml"
+        call = tw.calls.create(to=payload.to, from_=cfg["voice_number"], url=twiml_url, record=True)
+    except Exception as e:
+        raise HTTPException(500, f"Twilio call failed: {str(e)}")
+    doc = {
+        "id": str(uuid.uuid4()), "owner_id": user["id"], "sid": call.sid,
+        "to": payload.to, "from": cfg["voice_number"], "status": call.status,
+        "contact_id": payload.contact_id, "initiated_at": now_utc_iso(),
+        "direction": "outbound", "recording_urls": [],
+    }
+    await db.voice_calls.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/voice/calls")
+async def voice_list(user=Depends(get_current_user)):
+    items = await db.voice_calls.find({"owner_id": user["id"]}, {"_id": 0}).sort("initiated_at", -1).to_list(500)
+    return items
+
+# ---------- Webhooks (inbound) ----------
+@api_router.post("/webhooks/{channel}/{owner_id}")
+async def webhook_inbound(channel: str, owner_id: str, request: Request):
+    """Generic inbound webhook. Operator points provider here.
+    URL pattern: /api/webhooks/{channel}/{owner_id}
+    Channels supported: resend, whatsapp, voice
+    """
+    from fastapi import Request
+    raw = await request.body()
+    headers = dict(request.headers)
+    try:
+        data = await request.json()
+    except Exception:
+        try:
+            form = await request.form()
+            data = dict(form)
+        except Exception:
+            data = {}
+
+    if channel == "resend":
+        # Resend webhook event types: email.sent, email.delivered, email.opened, etc.
+        event_type = data.get("type", "unknown")
+        message_id = (data.get("data") or {}).get("email_id") or (data.get("data") or {}).get("id")
+        if event_type == "email.opened" and message_id:
+            await db.emails.update_one({"id": message_id, "owner_id": owner_id}, {"$set": {"opened": True, "opened_at": now_utc_iso()}})
+        await db.webhook_events.insert_one({
+            "id": str(uuid.uuid4()), "owner_id": owner_id, "channel": channel,
+            "event_type": event_type, "payload": data, "received_at": now_utc_iso(),
+        })
+        return {"ok": True}
+
+    if channel == "whatsapp":
+        # Twilio WhatsApp inbound
+        from_number = (data.get("From") or "").replace("whatsapp:", "")
+        body = data.get("Body", "")
+        sid = data.get("MessageSid")
+        # If status callback (delivered/read) update existing message
+        status_v = data.get("MessageStatus")
+        if status_v and sid:
+            await db.messages.update_one({"sid": sid}, {"$set": {"status": status_v, "updated_at": now_utc_iso()}})
+        else:
+            # New inbound message → create a ticket on first contact
+            contact = await db.contacts.find_one({"phone": from_number, "owner_id": owner_id}, {"_id": 0})
+            await db.messages.insert_one({
+                "id": str(uuid.uuid4()), "owner_id": owner_id, "channel": "whatsapp", "direction": "inbound",
+                "from": from_number, "body": body, "sid": sid, "received_at": now_utc_iso(),
+                "contact_id": contact["id"] if contact else None,
+            })
+            await db.tickets.insert_one({
+                "id": str(uuid.uuid4()), "owner_id": owner_id, "subject": f"WhatsApp: {body[:60]}",
+                "description": body, "channel": "whatsapp", "status": "open", "priority": "medium",
+                "contact_id": contact["id"] if contact else None,
+                "requester_name": contact["name"] if contact else from_number,
+                "requester_email": contact.get("email") if contact else None,
+                "comments": [], "created_at": now_utc_iso(), "updated_at": now_utc_iso(),
+            })
+        return {"ok": True}
+
+    if channel == "voice":
+        # Twilio voice status / recording callback
+        sid = data.get("CallSid")
+        recording_url = data.get("RecordingUrl")
+        status_v = data.get("CallStatus")
+        if sid and recording_url:
+            await db.voice_calls.update_one({"sid": sid}, {"$push": {"recording_urls": {"url": recording_url, "completed_at": now_utc_iso()}}})
+        if sid and status_v:
+            await db.voice_calls.update_one({"sid": sid}, {"$set": {"status": status_v}})
+        return {"ok": True}
+
+    return {"ok": True, "channel": channel, "stored": True}
 
 # ---------- Mount ----------
 app.include_router(api_router)

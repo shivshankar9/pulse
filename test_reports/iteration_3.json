@@ -1,0 +1,45 @@
+{
+  "summary": "Round B Phase 1 (RBAC + Integrations vault + Twilio channels + Webhooks). Backend: 30/30 pytest in /app/backend/tests/test_pulse_round_b.py + Round A 10/10 + CRM 14/14 (54/54 total) all green. Validated /api/auth/{register,login,me} return permissions[] (19) and role_label, /api/roles serves 4 system roles + custom CRUD with system-role write/delete protection and in-use guard, /api/permissions returns canonical 19, /api/users + PATCH role with users.manage gating (viewer→403), /api/integrations PUT/GET/DELETE for resend/twilio/google with Fernet encryption verified at-rest in MongoDB (stored ciphertext != plaintext, masked on read), test endpoints return 400 for invalid Twilio creds, /api/emails sent_via=log when unconfigured and log_failed when fake Resend key, /api/whatsapp/send and /api/voice/call gate on twilio config, webhooks: resend email.opened flips email.opened=true, whatsapp inbound creates ticket+message, voice CallSid update sets status and pushes recording_url. Frontend Playwright on demo@pulse.io: role badge ● Admin shown, nav-settings visible for admin, /app/settings renders with 4 tabs (integrations/roles/team/webhooks), Integrations card→Connect→form fields→Save→Test→Disconnect flow works for resend; Roles tab shows 4 system role cards with 'system' badge and no edit/delete buttons (system protection verified in UI), New role form with permission group checkboxes creates custom role; Team tab lists users with role-select dropdown; Webhooks tab shows /api/webhooks/{resend|whatsapp|voice}/{user_id} URLs with copy buttons. Note: demo user role was 'sales_lead' (custom) in DB before testing — restored to 'admin' to test settings flow per spec note ('demo is auto admin').",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/integrations/resend/test", "issue": "Resend API returns HTTP 400 (not 401) for invalid keys; current code only checks `if r.status_code == 401` and so returns 200 with info.status=400 to the caller. Should treat any non-2xx Resend response as 400. Verified via curl: api.resend.com/domains with fake key → HTTP 400 {\"message\":\"API key is invalid\"}."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Settings → Integrations → Test Resend with invalid key", "issue": "Toast shows 'resend: OK' even though the upstream API key is invalid, because backend test endpoint returns 200 (see backend minor issue). UI is correct given backend response, but operator UX is misleading.", "affected_selectors": ["[data-testid=\"integration-test-resend\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pulse_round_b.py",
+    "/app/test_reports/pytest/round_b_results.xml",
+    "/app/test_reports/pytest/all_results.xml"
+  ],
+  "action_items": [
+    "Backend: tighten /api/integrations/resend/test — treat any Resend response status >=400 as HTTPException(400, 'Invalid Resend API key / <body>'), not only 401. One-line fix in server.py around line 935."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1113 lines — extract /routers/{auth,rbac,integrations,channels,webhooks}.py before adding more features (already flagged last round at 706 lines).",
+    "Webhook endpoints /api/webhooks/{channel}/{owner_id} have no signature verification (no Twilio X-Twilio-Signature, no Resend Svix signature). Anyone with an owner_id can spoof events: e.g., flip email.opened, inject WhatsApp tickets, or alter call statuses. Add provider-specific signature verification before launch.",
+    "voice webhook update_one queries by sid alone ({\"sid\": sid}) — sid uniqueness across operators isn't guaranteed by Twilio in test sandboxes; scope to owner_id too: update_one({\"sid\": sid, \"owner_id\": owner_id}, ...).",
+    "Resend test endpoint only checks 401 — see action item above (real bug, surfaced by tests).",
+    "PROVIDER_KEYS validates key names but accepts arbitrary string values; consider Pydantic-typed configs per provider (e.g., E.164 regex on whatsapp_number/voice_number).",
+    "/api/integrations PUT replaces config wholesale only with provided keys — partial updates may drop previously-saved fields (e.g., editing only api_key wipes from_email). Merge with existing config or document this behavior in UI.",
+    "settings.manage is required for PUT/DELETE but GET /api/integrations is open to any authenticated user — consider also gating GET to settings.manage so non-admins can't see masked keys.",
+    "encrypt_secret silently no-ops if Fernet key missing — should fail loudly at startup if INTEGRATIONS_KEY isn't set in prod.",
+    "Demo user role reset path: there's no admin-bootstrap or seed migration; if an operator accidentally demotes the only admin, no admin remains. Consider a DB-level guard preventing the last admin from being demoted, or a CLI bootstrap."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pulse_round_b.py"
+  ],
+  "success_rate": {"backend": "100% (30/30 round B; 10/10 round A; 14/14 CRM — 54/54)", "frontend": "100% on tested Settings flows (integrations save/test/disconnect, roles list+create+system protection, team table, webhooks copy URLs)"},
+  "test_credentials": "demo@pulse.io / demo1234 (verified). Note: demo user role was 'sales_lead' in DB before this run; restored to 'admin' so settings.manage is granted. Round B tests register fresh TEST_RB_* users per fixture (admin + viewer).",
+  "seed_data_creation": "Backend tests register ~6 transient TEST_RB_* users. Encrypted resend/twilio/google integrations on the admin test user persist (not cleaned up post-suite — recommend teardown). UI test created+deleted TEST_UI_RoleQ7 custom role; resend was connected with re_TEST_UI_FAKE_abcdef098765 then disconnected. Demo user retains role='admin'.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Round B backend tests live in /app/backend/tests/test_pulse_round_b.py and read REACT_APP_BACKEND_URL from frontend/.env if env unset. New Settings testids: settings-page, settings-tab-{integrations|roles|team|webhooks}, integrations-section, integration-card-{provider}, integration-edit-{provider}, integration-form-{provider}, integration-input-{provider}-{key}, integration-save-{provider}, integration-cancel-{provider}, integration-test-{provider}, integration-disconnect-{provider}, roles-section, role-new-btn, role-form, role-input-name, role-input-desc, perm-toggle-{permission}, role-save-btn, role-card-{rid}, role-edit-{rid}, role-delete-{rid}, team-section, team-row-{uid}, team-role-{uid}, webhooks-section, webhook-{channel}, webhook-copy-{channel}, settings-denied. Webhook URL pattern: /api/webhooks/{resend|whatsapp|voice}/{owner_id}. INTEGRATIONS_KEY (Fernet) must be present in backend/.env. Use 2.5s+ wait after switching to Roles tab to allow data load.",
+  "rca of the issue": "Single backend bug: POST /api/integrations/resend/test only treats r.status_code==401 as a failure, but Resend's /domains endpoint returns 400 for invalid keys (verified via curl). Result: 'Test' for an invalid Resend API key returns 200 OK — both surfaced through backend pytest and replicated in the UI toast ('resend: OK'). Reproduction: PUT /api/integrations/resend with config.api_key='re_FAKE...' then POST /api/integrations/resend/test → 200 instead of 400. Mitigation (one-liner): replace `if r.status_code == 401` with `if r.status_code >= 400` (or specifically check r.ok) and raise HTTPException(400, ...). Same file: /app/backend/server.py around lines 933-937."
+}
