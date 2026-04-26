@@ -1375,7 +1375,7 @@ async def assign_ticket(tid: str, payload: TicketAssignIn, user=Depends(require_
         update["assignee_id"] = payload.assignee_id
     if "group_id" in payload.model_fields_set:
         update["group_id"] = payload.group_id
-    res = await db.tickets.update_one({"id": tid}, {"$set": update})
+    res = await db.tickets.update_one({"id": tid, "owner_id": user["id"]}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(404, "Not found")
     return await db.tickets.find_one({"id": tid}, {"_id": 0})
