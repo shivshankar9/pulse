@@ -932,9 +932,9 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
             # Use API key to fetch domains (lightweight verify)
             import requests
             r = requests.get("https://api.resend.com/domains", headers={"Authorization": f"Bearer {cfg.get('api_key')}"}, timeout=10)
-            if r.status_code == 401:
-                raise HTTPException(400, "Invalid Resend API key")
-            return {"ok": True, "provider": "resend", "info": r.json() if r.status_code == 200 else {"status": r.status_code}}
+            if r.status_code >= 400:
+                raise HTTPException(400, f"Invalid Resend API key (status {r.status_code})")
+            return {"ok": True, "provider": "resend", "info": r.json()}
         except HTTPException:
             raise
         except Exception as e:
