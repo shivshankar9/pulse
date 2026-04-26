@@ -1,5 +1,7 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import csv
+import io
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -464,6 +466,225 @@ async def ai_next_action(payload: AINextActionIn, user=Depends(get_current_user)
     )
     resp = await _llm_chat(sys_msg, "\n".join(parts), f"nba-{user['id']}")
     return {"recommendation": resp}
+
+# ---------- Bulk CSV Import ----------
+@api_router.post("/contacts/import")
+async def import_contacts_csv(file: UploadFile = File(...), user=Depends(get_current_user)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(400, "Only CSV files supported")
+    content = (await file.read()).decode("utf-8", errors="ignore")
+    reader = csv.DictReader(io.StringIO(content))
+    created = 0
+    errors = []
+    valid_status = {"lead", "qualified", "customer", "lost"}
+    for i, row in enumerate(reader, start=2):
+        name = (row.get("name") or row.get("Name") or "").strip()
+        if not name:
+            errors.append(f"Row {i}: missing name")
+            continue
+        status_v = (row.get("status") or "lead").strip().lower()
+        if status_v not in valid_status:
+            status_v = "lead"
+        tags_raw = row.get("tags") or ""
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "name": name,
+            "email": (row.get("email") or "").strip() or None,
+            "phone": (row.get("phone") or "").strip() or None,
+            "company": (row.get("company") or "").strip() or None,
+            "title": (row.get("title") or "").strip() or None,
+            "status": status_v,
+            "source": (row.get("source") or "").strip() or None,
+            "notes": (row.get("notes") or "").strip() or None,
+            "tags": tags,
+            "score": None,
+            "score_reason": None,
+            "created_at": now_utc_iso(),
+            "updated_at": now_utc_iso(),
+        }
+        await db.contacts.insert_one(doc)
+        created += 1
+    return {"created": created, "errors": errors}
+
+# ---------- Saved Views ----------
+class SavedViewIn(BaseModel):
+    name: str
+    entity: Literal["contacts", "deals"] = "contacts"
+    filters: dict = {}
+
+@api_router.get("/views")
+async def list_views(user=Depends(get_current_user)):
+    items = await db.saved_views.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return items
+
+@api_router.post("/views")
+async def create_view(payload: SavedViewIn, user=Depends(get_current_user)):
+    doc = {
+        **payload.model_dump(),
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "created_at": now_utc_iso(),
+    }
+    await db.saved_views.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/views/{vid}")
+async def delete_view(vid: str, user=Depends(get_current_user)):
+    await db.saved_views.delete_one({"id": vid, "owner_id": user["id"]})
+    return {"ok": True}
+
+# ---------- Tickets ----------
+class TicketIn(BaseModel):
+    subject: str
+    description: Optional[str] = None
+    contact_id: Optional[str] = None
+    status: Literal["open", "pending", "resolved", "closed"] = "open"
+    priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    channel: Literal["portal", "email", "whatsapp", "call", "chat", "internal"] = "internal"
+
+class TicketCommentIn(BaseModel):
+    body: str
+
+class PublicTicketIn(BaseModel):
+    workspace_email: EmailStr  # the operator email to route the ticket to
+    subject: str
+    description: str
+    requester_name: str
+    requester_email: EmailStr
+
+@api_router.get("/tickets")
+async def list_tickets(user=Depends(get_current_user)):
+    items = await db.tickets.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+@api_router.post("/tickets")
+async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
+    doc = {
+        **payload.model_dump(),
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "comments": [],
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    await db.tickets.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/tickets/{tid}")
+async def update_ticket(tid: str, payload: TicketIn, user=Depends(get_current_user)):
+    res = await db.tickets.update_one(
+        {"id": tid, "owner_id": user["id"]},
+        {"$set": {**payload.model_dump(), "updated_at": now_utc_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return await db.tickets.find_one({"id": tid}, {"_id": 0})
+
+@api_router.post("/tickets/{tid}/comments")
+async def add_ticket_comment(tid: str, payload: TicketCommentIn, user=Depends(get_current_user)):
+    comment = {
+        "id": str(uuid.uuid4()),
+        "author": user["name"],
+        "body": payload.body,
+        "created_at": now_utc_iso(),
+    }
+    res = await db.tickets.update_one(
+        {"id": tid, "owner_id": user["id"]},
+        {"$push": {"comments": comment}, "$set": {"updated_at": now_utc_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return await db.tickets.find_one({"id": tid}, {"_id": 0})
+
+@api_router.delete("/tickets/{tid}")
+async def delete_ticket(tid: str, user=Depends(get_current_user)):
+    await db.tickets.delete_one({"id": tid, "owner_id": user["id"]})
+    return {"ok": True}
+
+# Public ticket submission (no auth)
+@api_router.post("/public/tickets")
+async def public_create_ticket(payload: PublicTicketIn):
+    operator = await db.users.find_one({"email": payload.workspace_email.lower()})
+    if not operator:
+        raise HTTPException(404, "Workspace not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "owner_id": operator["id"],
+        "subject": payload.subject,
+        "description": payload.description,
+        "contact_id": None,
+        "status": "open",
+        "priority": "medium",
+        "comments": [],
+        "source": "public_portal",
+        "channel": "portal",
+        "requester_name": payload.requester_name,
+        "requester_email": payload.requester_email.lower(),
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    await db.tickets.insert_one(doc)
+    return {"ok": True, "ticket_id": doc["id"]}
+
+# ---------- AI: Per-deal insight ----------
+class AIDealInsightIn(BaseModel):
+    deal_id: str
+
+@api_router.post("/ai/deal-insight")
+async def ai_deal_insight(payload: AIDealInsightIn, user=Depends(get_current_user)):
+    deal = await db.deals.find_one({"id": payload.deal_id, "owner_id": user["id"]}, {"_id": 0})
+    if not deal:
+        raise HTTPException(404, "Deal not found")
+    contact = None
+    if deal.get("contact_id"):
+        contact = await db.contacts.find_one({"id": deal["contact_id"]}, {"_id": 0})
+
+    sys_msg = (
+        "You are a senior B2B deal strategist. Output in this exact format:\n"
+        "RISK: <low|medium|high>\n"
+        "WIN_PROBABILITY: <0-100>%\n"
+        "BLOCKERS:\n  - <blocker 1>\n  - <blocker 2>\n"
+        "MOVES:\n  1. <next move>\n  2. <next move>\n  3. <next move>\n"
+        "TALKING_POINTS:\n  - <point>\n  - <point>"
+    )
+    prompt = f"Deal: {deal}\nContact: {contact}\n\nProvide a concise strategic readout."
+    resp = await _llm_chat(sys_msg, prompt, f"insight-{payload.deal_id}")
+    return {"insight": resp}
+
+# ---------- Channels (integration config) ----------
+class ChannelConfigIn(BaseModel):
+    channel: Literal["email", "whatsapp", "calls", "chat"]
+    enabled: bool = False
+    config: dict = {}
+
+@api_router.get("/channels")
+async def list_channels(user=Depends(get_current_user)):
+    items = await db.channels.find({"owner_id": user["id"]}, {"_id": 0}).to_list(50)
+    return items
+
+@api_router.put("/channels")
+async def upsert_channel(payload: ChannelConfigIn, user=Depends(get_current_user)):
+    existing = await db.channels.find_one({"owner_id": user["id"], "channel": payload.channel})
+    if existing:
+        await db.channels.update_one(
+            {"owner_id": user["id"], "channel": payload.channel},
+            {"$set": {"enabled": payload.enabled, "config": payload.config, "updated_at": now_utc_iso()}},
+        )
+    else:
+        await db.channels.insert_one({
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "channel": payload.channel,
+            "enabled": payload.enabled,
+            "config": payload.config,
+            "created_at": now_utc_iso(),
+            "updated_at": now_utc_iso(),
+        })
+    return await db.channels.find_one({"owner_id": user["id"], "channel": payload.channel}, {"_id": 0})
 
 # ---------- Mount ----------
 app.include_router(api_router)

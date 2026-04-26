@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut } from "lucide-react";
+import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio } from "lucide-react";
 
 const navItems = [
     { to: "/app", label: "Dashboard", icon: LayoutGrid, end: true, testid: "nav-dashboard" },
@@ -8,6 +8,8 @@ const navItems = [
     { to: "/app/pipeline", label: "Pipeline", icon: GitBranch, testid: "nav-pipeline" },
     { to: "/app/activities", label: "Activities", icon: ListChecks, testid: "nav-activities" },
     { to: "/app/emails", label: "Emails", icon: Mail, testid: "nav-emails" },
+    { to: "/app/tickets", label: "Tickets", icon: LifeBuoy, testid: "nav-tickets" },
+    { to: "/app/channels", label: "Channels", icon: Radio, testid: "nav-channels" },
     { to: "/app/assistant", label: "AI Assistant", icon: Sparkles, testid: "nav-assistant" },
 ];
 

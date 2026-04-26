@@ -1,0 +1,30 @@
+{
+  "summary": "Round A regression complete. Backend 10/10 pytest passing in test_pulse_round_a.py covering: POST /api/contacts/import (CSV happy path + missing name error + non-CSV 400), saved views CRUD (/api/views POST/GET/DELETE), tickets full lifecycle with channel field (create with channel=email, PUT updates status/priority/channel, POST comments with author=user.name, list, delete) plus 404 on unknown ticket, public portal POST /api/public/tickets (no-auth) routing to operator by workspace_email and 404 on unknown workspace, channels GET/PUT upsert idempotency (no duplicate per (owner,channel)) for email/whatsapp/calls/chat, and POST /api/ai/deal-insight returning structured Claude readout (>1.5KB output, contains RISK/WIN_PROBABILITY/MOVES) plus 404 on unknown deal. Existing test_pulse_crm.py suite preserved. Frontend Playwright walkthrough on demo@pulse.io verified: sidebar nav-tickets and nav-channels visible and clickable; /app/contacts shows Import CSV button, search box, status filter and Save View flow (saved view persisted and rendered as applied chip); Pipeline deal click opens DealDrawer with Details + AI Insight tabs and Run insight returned 1564-char structured insight; Tickets page create flow works, status and priority dropdowns update, comment added and shown with channel badges (pending/high); Channels page renders 4 cards (email/whatsapp/calls/chat), toggle flips Enable->Disable, portal URL prefilled with demo@pulse.io and copy button works; Public /support?to= page prefilled workspace_email and submission shows ticket-success state. No console errors observed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_pulse_round_a.py",
+    "/app/backend/tests/test_pulse_crm.py",
+    "/app/test_reports/pytest/round_a_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 706 lines; consider splitting tickets/channels/views/ai modules into routers under /app/backend/routes/ for maintainability before adding more features.",
+    "POST /api/public/tickets has no rate limiting or CAPTCHA - in production this is an open ticket-spam vector against any known operator email; add basic IP rate limit and optional honeypot before launch.",
+    "PUT /api/tickets/{tid} accepts the full TicketIn model and overwrites fields like channel/contact_id even when client only intended a status flip; frontend works around it by spreading {...t} but a PATCH endpoint would be safer.",
+    "/api/contacts/import has no per-request size limit and inserts contacts one-by-one (await insert_one in loop); switch to insert_many for large CSVs and add a row cap (e.g., 5000) to prevent memory/abuse issues.",
+    "Channels page hardcodes the displayed Webhook URL to /api/webhooks/{ch.id} but no such webhook endpoints exist on the backend yet - currently cosmetic only; flag for future implementation or remove the misleading hint.",
+    "Saved views filters are stored as free-form dict and only consumed client-side in Contacts.jsx; entity='deals' option exists in the model but no UI applies it - either wire it up or remove from the Literal until used.",
+    "Public ticket endpoint trusts client-provided requester_email/name with only EmailStr validation; consider sanitizing description/subject length to prevent abuse."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pulse_round_a.py"
+  ],
+  "success_rate": {"backend": "100% (10/10 round A; previous 14/14 still green)", "frontend": "100% on tested flows"},
+  "test_credentials": "demo@pulse.io / demo1234 (verified). Round A test suite registers fresh TEST_ users per module.",
+  "seed_data_creation": "Round A tests created TEST_CSV Alice/Bob contacts, TEST_VIP saved view, TEST_Login broken ticket, TEST_Insight Deal under fresh registered users. UI run also created an additional saved view, a UI_Ticket_Login_Issue ticket, toggled email channel to enabled then disabled, and submitted one public ticket as jane@external.io into demo@pulse.io workspace.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Round A regression file: /app/backend/tests/test_pulse_round_a.py. Key testids added this round: contacts-import-btn, contacts-search, contacts-status-filter, contacts-save-view-btn, view-name-input, view-save-confirm, view-apply-{id}, view-delete-{id}, deal-drawer, deal-tab-details, deal-tab-ai, deal-run-insight, deal-insight-output, deal-drawer-close, tickets-page, ticket-new-btn, ticket-form, ticket-input-subject, ticket-input-description, ticket-input-priority, ticket-save-btn, ticket-row-{id}, ticket-detail-status, ticket-detail-priority, ticket-comment-input, ticket-comment-send, channels-page, channel-card-{id}, channel-toggle-{id}, portal-url-input, portal-copy-btn, public-support-page, public-workspace-email, public-requester-name, public-requester-email, public-subject, public-description, public-submit-btn, ticket-success. Auth route is /auth (NOT /login). AI deal-insight uses anthropic claude-sonnet-4-5-20250929 via emergentintegrations and takes ~10-15s.",
+  "rca of the issue": "No issues found. All Round A backend endpoints and frontend flows are functioning as specified; integration between Tickets list, Tickets detail (status/priority/comments), Channels toggle, Public Support submission and operator queue is intact end-to-end."
+}

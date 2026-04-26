@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Plus, X, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import DealDrawer from "../components/app/DealDrawer";
 
 const STAGES = [
     { id: "lead", label: "Lead" },
@@ -17,60 +18,45 @@ const emptyDeal = { title: "", contact_id: "", company: "", value: 0, currency: 
 const Pipeline = () => {
     const [deals, setDeals] = useState([]);
     const [contacts, setContacts] = useState([]);
-    const [open, setOpen] = useState(false);
+    const [openCreate, setOpenCreate] = useState(false);
     const [form, setForm] = useState(emptyDeal);
-    const [editingId, setEditingId] = useState(null);
     const [draggingId, setDraggingId] = useState(null);
     const [overStage, setOverStage] = useState(null);
+    const [drawerDeal, setDrawerDeal] = useState(null);
 
     const load = async () => {
         const [d, c] = await Promise.all([api.get("/deals"), api.get("/contacts")]);
         setDeals(d.data);
         setContacts(c.data);
+        if (drawerDeal) {
+            const updated = d.data.find((x) => x.id === drawerDeal.id);
+            if (updated) setDrawerDeal(updated);
+        }
     };
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
     const save = async (e) => {
         e.preventDefault();
         try {
-            const payload = { ...form, value: Number(form.value) || 0, probability: Number(form.probability) || 0 };
-            if (editingId) {
-                await api.put(`/deals/${editingId}`, payload);
-                toast.success("Deal updated");
-            } else {
-                await api.post("/deals", payload);
-                toast.success("Deal created");
-            }
-            setOpen(false); setForm(emptyDeal); setEditingId(null);
+            const payload = { ...form, value: Number(form.value) || 0, probability: Number(form.probability) || 0, contact_id: form.contact_id || null };
+            await api.post("/deals", payload);
+            toast.success("Deal created");
+            setOpenCreate(false); setForm(emptyDeal);
             load();
         } catch (err) {
             toast.error(err.response?.data?.detail || "Save failed");
         }
     };
 
-    const edit = (d) => {
-        setForm({ ...emptyDeal, ...d, contact_id: d.contact_id || "" });
-        setEditingId(d.id);
-        setOpen(true);
-    };
-
-    const remove = async (id) => {
-        if (!window.confirm("Delete this deal?")) return;
-        await api.delete(`/deals/${id}`);
-        toast.success("Deleted");
-        load();
-    };
-
     const onDrop = async (stage) => {
         if (!draggingId) return;
         const deal = deals.find((d) => d.id === draggingId);
         if (!deal || deal.stage === stage) { setDraggingId(null); setOverStage(null); return; }
-        // Optimistic
         setDeals((prev) => prev.map((d) => d.id === draggingId ? { ...d, stage } : d));
         setDraggingId(null); setOverStage(null);
         try {
             await api.patch(`/deals/${deal.id}/stage`, { stage });
-        } catch (err) {
+        } catch {
             toast.error("Update failed");
             load();
         }
@@ -87,7 +73,7 @@ const Pipeline = () => {
                 </div>
                 <button
                     data-testid="pipeline-new-btn"
-                    onClick={() => { setForm(emptyDeal); setEditingId(null); setOpen(true); }}
+                    onClick={() => { setForm(emptyDeal); setOpenCreate(true); }}
                     className="bg-brand text-white px-5 py-3 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-ink transition-all"
                 >
                     <Plus className="w-4 h-4" /> New deal
@@ -121,20 +107,13 @@ const Pipeline = () => {
                                         draggable
                                         onDragStart={() => setDraggingId(d.id)}
                                         onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
-                                        onClick={() => edit(d)}
+                                        onClick={() => setDrawerDeal(d)}
                                         data-testid={`deal-card-${d.id}`}
                                         className={`bg-bg border-2 border-ink p-3 cursor-grab active:cursor-grabbing brutal-hover ${draggingId === d.id ? "opacity-40" : ""}`}
                                     >
                                         <div className="font-bold text-sm leading-tight mb-1">{d.title}</div>
                                         {d.company && <div className="text-xs text-inkSecondary">{d.company}</div>}
-                                        <div className="flex items-center justify-between mt-3">
-                                            <span className="font-mono text-sm font-bold">{fmt(d.value)}</span>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); remove(d.id); }}
-                                                data-testid={`deal-delete-${d.id}`}
-                                                className="text-inkSecondary hover:text-bad"
-                                            ><Trash2 className="w-3 h-3" /></button>
-                                        </div>
+                                        <div className="font-mono text-sm font-bold mt-2">{fmt(d.value)}</div>
                                     </div>
                                 ))}
                             </div>
@@ -143,12 +122,12 @@ const Pipeline = () => {
                 })}
             </div>
 
-            {open && (
-                <div className="fixed inset-0 bg-ink/40 z-40 flex justify-end" data-testid="deal-drawer">
+            {openCreate && (
+                <div className="fixed inset-0 bg-ink/40 z-40 flex justify-end" data-testid="deal-create-drawer">
                     <div className="w-full max-w-md bg-white border-l-2 border-ink p-6 overflow-y-auto animate-fade-in">
                         <div className="flex items-center justify-between mb-6">
-                            <h2 className="font-heading font-black text-2xl tracking-tighter">{editingId ? "Edit deal" : "New deal"}</h2>
-                            <button data-testid="deal-drawer-close" onClick={() => setOpen(false)} className="border-2 border-ink p-1 hover:bg-ink hover:text-white"><X className="w-4 h-4" /></button>
+                            <h2 className="font-heading font-black text-2xl tracking-tighter">New deal</h2>
+                            <button data-testid="deal-create-close" onClick={() => setOpenCreate(false)} className="border-2 border-ink p-1 hover:bg-ink hover:text-white"><X className="w-4 h-4" /></button>
                         </div>
                         <form onSubmit={save} className="space-y-4">
                             <div>
@@ -157,7 +136,7 @@ const Pipeline = () => {
                             </div>
                             <div>
                                 <label className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Contact</label>
-                                <select data-testid="deal-input-contact" value={form.contact_id || ""} onChange={(e) => setForm({ ...form, contact_id: e.target.value || null })} className="w-full bg-white border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm">
+                                <select data-testid="deal-input-contact" value={form.contact_id || ""} onChange={(e) => setForm({ ...form, contact_id: e.target.value })} className="w-full bg-white border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm">
                                     <option value="">— none —</option>
                                     {contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </select>
@@ -182,10 +161,20 @@ const Pipeline = () => {
                                 <label className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Notes</label>
                                 <textarea data-testid="deal-input-notes" rows={3} value={form.notes || ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="w-full bg-white border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm resize-none" />
                             </div>
-                            <button data-testid="deal-save-btn" type="submit" className="w-full bg-brand text-white px-5 py-3 font-bold uppercase tracking-widest text-sm brutal-shadow hover:bg-ink transition-all">{editingId ? "Update" : "Create"}</button>
+                            <button data-testid="deal-save-btn" type="submit" className="w-full bg-brand text-white px-5 py-3 font-bold uppercase tracking-widest text-sm brutal-shadow hover:bg-ink transition-all">Create</button>
                         </form>
                     </div>
                 </div>
+            )}
+
+            {drawerDeal && (
+                <DealDrawer
+                    deal={drawerDeal}
+                    contacts={contacts}
+                    onClose={() => setDrawerDeal(null)}
+                    onUpdate={() => load()}
+                    onDelete={() => { setDrawerDeal(null); load(); }}
+                />
             )}
         </div>
     );

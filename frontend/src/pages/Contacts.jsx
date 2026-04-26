@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
-import { Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Plus, Sparkles, Trash2, X, Upload, Search, Save, Bookmark } from "lucide-react";
 import { toast } from "sonner";
 
 const emptyForm = { name: "", email: "", phone: "", company: "", title: "", status: "lead", source: "", notes: "", tags: [] };
@@ -11,10 +11,17 @@ const Contacts = () => {
     const [form, setForm] = useState(emptyForm);
     const [editingId, setEditingId] = useState(null);
     const [scoringId, setScoringId] = useState(null);
+    const [search, setSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState("all");
+    const [views, setViews] = useState([]);
+    const [showSaveView, setShowSaveView] = useState(false);
+    const [viewName, setViewName] = useState("");
+    const [importing, setImporting] = useState(false);
 
     const load = async () => {
-        const { data } = await api.get("/contacts");
-        setContacts(data);
+        const [c, v] = await Promise.all([api.get("/contacts"), api.get("/views")]);
+        setContacts(c.data);
+        setViews(v.data.filter((x) => x.entity === "contacts"));
     };
     useEffect(() => { load(); }, []);
 
@@ -60,6 +67,56 @@ const Contacts = () => {
         setScoringId(null);
     };
 
+    const onImport = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImporting(true);
+        try {
+            const fd = new FormData();
+            fd.append("file", file);
+            const { data } = await api.post("/contacts/import", fd, { headers: { "Content-Type": "multipart/form-data" } });
+            toast.success(`Imported ${data.created} contacts${data.errors.length ? ` (${data.errors.length} errors)` : ""}`);
+            load();
+        } catch (err) {
+            toast.error("Import failed: " + (err.response?.data?.detail || ""));
+        }
+        setImporting(false);
+        e.target.value = "";
+    };
+
+    const saveView = async () => {
+        if (!viewName.trim()) return;
+        try {
+            await api.post("/views", { name: viewName, entity: "contacts", filters: { search, statusFilter } });
+            toast.success("View saved");
+            setViewName(""); setShowSaveView(false);
+            load();
+        } catch (err) {
+            toast.error("Save failed");
+        }
+    };
+
+    const applyView = (v) => {
+        setSearch(v.filters?.search || "");
+        setStatusFilter(v.filters?.statusFilter || "all");
+    };
+
+    const deleteView = async (id) => {
+        await api.delete(`/views/${id}`);
+        load();
+    };
+
+    const filtered = useMemo(() => {
+        return contacts.filter((c) => {
+            if (statusFilter !== "all" && c.status !== statusFilter) return false;
+            if (search) {
+                const q = search.toLowerCase();
+                return [c.name, c.email, c.company, c.title].some((f) => (f || "").toLowerCase().includes(q));
+            }
+            return true;
+        });
+    }, [contacts, search, statusFilter]);
+
     const scoreColor = (s) => {
         if (s == null) return "text-inkSecondary";
         if (s >= 70) return "text-brand";
@@ -69,18 +126,51 @@ const Contacts = () => {
 
     return (
         <div className="p-6 md:p-10 max-w-[1400px]" data-testid="contacts-page">
-            <div className="flex items-end justify-between mb-8 flex-wrap gap-4">
+            <div className="flex items-end justify-between mb-6 flex-wrap gap-4">
                 <div>
                     <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary mb-2">// contacts.db</div>
                     <h1 className="font-heading font-black text-4xl md:text-5xl tracking-tighter">Contacts</h1>
                 </div>
-                <button
-                    data-testid="contacts-new-btn"
-                    onClick={() => { setForm(emptyForm); setEditingId(null); setOpen(true); }}
-                    className="bg-brand text-white px-5 py-3 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-ink transition-all"
-                >
-                    <Plus className="w-4 h-4" /> New contact
+                <div className="flex flex-wrap gap-2">
+                    <label data-testid="contacts-import-btn" className="border-2 border-ink px-4 py-2.5 text-xs font-bold uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:bg-ink hover:text-white transition-all">
+                        <Upload className="w-3.5 h-3.5" /> {importing ? "Importing…" : "Import CSV"}
+                        <input type="file" accept=".csv" className="hidden" onChange={onImport} disabled={importing} />
+                    </label>
+                    <button
+                        data-testid="contacts-new-btn"
+                        onClick={() => { setForm(emptyForm); setEditingId(null); setOpen(true); }}
+                        className="bg-brand text-white px-5 py-2.5 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-ink transition-all"
+                    >
+                        <Plus className="w-4 h-4" /> New contact
+                    </button>
+                </div>
+            </div>
+
+            {/* Filters bar */}
+            <div className="bg-white border-2 border-ink p-3 mb-4 flex flex-wrap items-center gap-2" data-testid="contacts-filter-bar">
+                <div className="flex items-center gap-2 flex-1 min-w-[200px] border-2 border-ink bg-bg px-2">
+                    <Search className="w-3.5 h-3.5 text-inkSecondary" />
+                    <input data-testid="contacts-search" placeholder="Search name, email, company…" value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 bg-transparent py-2 outline-none text-sm" />
+                </div>
+                <select data-testid="contacts-status-filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-xs font-bold uppercase tracking-widest">
+                    <option value="all">all status</option>
+                    {["lead", "qualified", "customer", "lost"].map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {views.map((v) => (
+                    <button key={v.id} data-testid={`view-apply-${v.id}`} onClick={() => applyView(v)} className="border-2 border-ink px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-brand hover:text-white hover:border-brand flex items-center gap-1">
+                        <Bookmark className="w-3 h-3" /> {v.name}
+                        <X data-testid={`view-delete-${v.id}`} onClick={(e) => { e.stopPropagation(); deleteView(v.id); }} className="w-3 h-3 ml-1 hover:text-bad" />
+                    </button>
+                ))}
+                <button data-testid="contacts-save-view-btn" onClick={() => setShowSaveView(!showSaveView)} className="border-2 border-ink px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1">
+                    <Save className="w-3 h-3" /> Save view
                 </button>
+                {showSaveView && (
+                    <div className="flex gap-2 w-full md:w-auto">
+                        <input data-testid="view-name-input" placeholder="View name" value={viewName} onChange={(e) => setViewName(e.target.value)} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-sm" />
+                        <button data-testid="view-save-confirm" onClick={saveView} className="bg-brand text-white px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink">Save</button>
+                    </div>
+                )}
             </div>
 
             <div className="bg-white border-2 border-ink overflow-x-auto">
@@ -93,10 +183,10 @@ const Contacts = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {contacts.length === 0 && (
-                            <tr><td colSpan={6} className="px-4 py-12 text-center text-inkSecondary">No contacts yet. Click "New contact" to get started.</td></tr>
+                        {filtered.length === 0 && (
+                            <tr><td colSpan={6} className="px-4 py-12 text-center text-inkSecondary">No contacts match filter.</td></tr>
                         )}
-                        {contacts.map((c) => (
+                        {filtered.map((c) => (
                             <tr key={c.id} className="border-b border-line hover:bg-bg" data-testid={`contact-row-${c.id}`}>
                                 <td className="px-4 py-3 font-bold cursor-pointer" onClick={() => edit(c)}>
                                     {c.name}
@@ -135,7 +225,6 @@ const Contacts = () => {
                 </table>
             </div>
 
-            {/* Drawer */}
             {open && (
                 <div className="fixed inset-0 bg-ink/40 z-40 flex justify-end" data-testid="contact-drawer">
                     <div className="w-full max-w-md bg-white border-l-2 border-ink p-6 overflow-y-auto animate-fade-in">

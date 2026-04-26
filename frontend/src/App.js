@@ -10,6 +10,9 @@ import Pipeline from "./pages/Pipeline";
 import Activities from "./pages/Activities";
 import Emails from "./pages/Emails";
 import AIAssistant from "./pages/AIAssistant";
+import Tickets from "./pages/Tickets";
+import Channels from "./pages/Channels";
+import PublicSupport from "./pages/PublicSupport";
 import "./App.css";
 
 const Protected = ({ children }) => {
@@ -27,12 +30,15 @@ function App() {
                 <Routes>
                     <Route path="/" element={<Landing />} />
                     <Route path="/auth" element={<Auth />} />
+                    <Route path="/support" element={<PublicSupport />} />
                     <Route element={<Protected><AppShell /></Protected>}>
                         <Route path="/app" element={<Dashboard />} />
                         <Route path="/app/contacts" element={<Contacts />} />
                         <Route path="/app/pipeline" element={<Pipeline />} />
                         <Route path="/app/activities" element={<Activities />} />
                         <Route path="/app/emails" element={<Emails />} />
+                        <Route path="/app/tickets" element={<Tickets />} />
+                        <Route path="/app/channels" element={<Channels />} />
                         <Route path="/app/assistant" element={<AIAssistant />} />
                     </Route>
                 </Routes>
