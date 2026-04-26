@@ -1,0 +1,100 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 4: Swiss & High-Contrast",
+  "design_philosophy": "A brutalist yet refined SaaS CRM dashboard. Optimizes for data density, precision, and authority. Avoids the soft, friendly 'SaaS blur' in favor of sharp lines, high contrast typography, and an unapologetic, technical color palette.",
+  "colors": {
+    "background": "#F5F5F3",
+    "surface": "#FFFFFF",
+    "primary": "#FF3B00",
+    "primary_hover": "#CC2F00",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#5C5C5C",
+    "border": "#E5E5E5",
+    "border_focus": "#0A0A0A",
+    "ai_accent_bg": "#FFF0ED",
+    "ai_accent_text": "#FF3B00",
+    "success": "#008A27",
+    "warning": "#FFB800",
+    "danger": "#E50000"
+  },
+  "typography": {
+    "import_url": "https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,400&f[]=cabinet-grotesk@800,500,700,400,900&display=swap",
+    "import_url_mono": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap",
+    "headings_font": "'Cabinet Grotesk', sans-serif",
+    "body_font": "'Satoshi', sans-serif",
+    "mono_font": "'JetBrains Mono', monospace",
+    "classes": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tighter leading-none text-text_primary",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight text-text_primary",
+      "h3": "text-xl sm:text-2xl font-bold tracking-tight text-text_primary",
+      "h4": "text-lg sm:text-xl font-semibold tracking-tight text-text_primary",
+      "body": "text-sm sm:text-base font-medium leading-relaxed text-text_primary",
+      "label": "text-xs font-bold uppercase tracking-[0.2em] text-text_secondary",
+      "data_numbers": "font-mono text-sm tracking-tight text-text_primary"
+    }
+  },
+  "spacing_and_layout": {
+    "container_padding": "p-6 md:p-8",
+    "grid_gap": "gap-4 md:gap-6",
+    "card_padding": "p-5",
+    "border_radius": "rounded-none",
+    "dashboard_grid": "grid-cols-1 md:grid-cols-4 lg:grid-cols-12",
+    "max_width": "max-w-7xl mx-auto"
+  },
+  "component_guidelines": {
+    "button": {
+      "primary": "rounded-none bg-primary text-white border-2 border-transparent px-4 py-2 font-bold transition-all hover:bg-black active:scale-95 focus:ring-2 focus:ring-primary focus:ring-offset-2",
+      "secondary": "rounded-none bg-surface text-text_primary border-2 border-border px-4 py-2 font-bold transition-all hover:border-black active:scale-95 focus:ring-2 focus:ring-black focus:ring-offset-2",
+      "ghost": "rounded-none text-text_secondary px-4 py-2 font-bold transition-all hover:text-black hover:bg-black/5"
+    },
+    "card": "rounded-none bg-white border border-border transition-all duration-200 relative group overflow-hidden",
+    "card_hover_effect": "hover:-translate-y-1 hover:shadow-[4px_4px_0px_0px_rgba(10,10,10,1)] hover:border-black",
+    "input": "rounded-none border border-border px-3 py-2 text-sm focus:border-black focus:ring-1 focus:ring-black outline-none bg-transparent transition-all text-text_primary placeholder:text-text_secondary/50",
+    "badge": "rounded-none px-2 py-0.5 text-xs font-bold uppercase tracking-wider border border-current",
+    "table": "w-full text-sm text-left. Header rows uppercase tracking-[0.1em] text-xs text-text_secondary border-b-2 border-black. Data rows hover:bg-black/5 transition-colors.",
+    "kanban_board": {
+      "column": "bg-background border border-border p-4 flex flex-col gap-3 min-w-[300px]",
+      "card": "bg-white border border-border p-3 cursor-grab active:cursor-grabbing hover:border-black hover:shadow-[2px_2px_0px_0px_rgba(10,10,10,1)] transition-all"
+    },
+    "ai_panel": "bg-ai_accent_bg border border-primary p-5 relative. Use 'JetBrains Mono' for AI thought processes or tags to give a technical, computational feel.",
+    "sidebar_nav": "w-64 bg-surface border-r border-border flex flex-col p-4. Nav links should be bold, text-text_secondary, hover:text-black hover:bg-black/5."
+  },
+  "motion_and_interactions": {
+    "hover_state": "Sharp translation (-translate-y-1) with brutalist hard shadow (shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]) instead of soft blurs.",
+    "page_transition": "opacity-0 to opacity-100 over 200ms ease-out.",
+    "kanban_drag": "Scale up slightly (scale-105), rotate slightly (rotate-1) and apply hard shadow while dragging."
+  },
+  "media_urls": {
+    "user_avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1576558656222-ba66febe3dec?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NzIyOTA0Mnww&ixlib=rb-4.1.0&q=85",
+        "description": "Avatar placeholder - Man in grey jacket"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NzIyOTA0Mnww&ixlib=rb-4.1.0&q=85",
+        "description": "Avatar placeholder - Man in white shirt"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1769636929388-99eff95d3bf1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NzIyOTA0Mnww&ixlib=rb-4.1.0&q=85",
+        "description": "Avatar placeholder - Woman in black sweatshirt"
+      }
+    ]
+  },
+  "iconography": {
+    "library": "lucide-react",
+    "style": "Use lucide-react with strokeWidth={2} or strokeWidth={2.5} for a crisper, technical appearance that matches the high-contrast typography."
+  },
+  "accessibility_and_testing": {
+    "testing_attributes": "All interactive elements (buttons, inputs, kanban cards, nav items, modals) MUST have a descriptive 'data-testid' attribute in kebab-case (e.g., 'data-testid=\"nav-dashboard-link\"', 'data-testid=\"kanban-deal-card-123\"').",
+    "focus_states": "Never remove focus outlines without providing a highly visible alternative. Default focus should be a solid black 2px ring."
+  },
+  "instructions_to_main_agent": [
+    "Inject the font import URLs into the global CSS or index.html.",
+    "Configure Tailwind CSS to use 'Cabinet Grotesk' for headings, 'Satoshi' for sans/body, and 'JetBrains Mono' for mono. Ensure you extend the default theme colors using the palette provided above.",
+    "The UI is built with .js files (not TypeScript). Keep React components standard and simple.",
+    "Do not use generic Shadcn soft shadows or rounded corners. Override Shadcn primitive classes to enforce 'rounded-none' and hard borders.",
+    "Build the dashboard using a dense, control-room style grid. Use progressive disclosure: show top metrics clearly, then allow users to dive into dense table views.",
+    "For the AI Agent panel, position it as a distinctive drawer or persistent right-hand column using the 'ai_accent_bg'. Make AI suggestions look like executable code or highly structured insights rather than generic chat bubbles.",
+    "Strictly follow the data-testid requirement for every clickable element and form field."
+  ]
+}
