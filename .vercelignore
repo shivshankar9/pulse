@@ -1,0 +1,9 @@
+# Don't ignore anything - include all files
+!*/
+
+# Except these
+.git
+.gitignore
+node_modules
+*.log
+.DS_Store

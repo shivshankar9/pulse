@@ -7,12 +7,14 @@ This application is ready for deployment to Vercel, Render, or Supabase.
 ### Vercel Deployment
 1. Push your code to GitHub/GitLab/Bitbucket
 2. Connect your repository to Vercel
-3. Configure build settings:
+3. Vercel will automatically detect the `vercel.json` configuration
+4. If manual configuration is needed:
    - Build Command: `cd frontend && npm run build`
    - Output Directory: `frontend/build`
    - Install Command: `cd frontend && npm install`
-4. Add environment variables:
-   - `REACT_APP_BACKEND_URL`: Your backend API URL
+   - Framework: Create React App
+5. Add environment variables:
+   - `REACT_APP_BACKEND_URL`: Your backend API URL (e.g., `https://your-backend.onrender.com`)
 
 ### Render Deployment
 1. Create a new Static Site on Render

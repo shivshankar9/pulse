@@ -20,9 +20,17 @@ from openai import AsyncOpenAI
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+mongo_url = os.environ.get('MONGO_URL', '')
+USE_MOCK_DB = os.environ.get('USE_MOCK_DB', 'false').lower() == 'true'
+
+if USE_MOCK_DB or not mongo_url:
+    from mongomock_motor import AsyncMongoMockClient
+    client = AsyncMongoMockClient()
+    logging.warning("Using in-memory mock MongoDB — data will not persist between restarts")
+else:
+    client = AsyncIOMotorClient(mongo_url)
+
+db = client[os.environ.get('DB_NAME', 'pulse_crm')]
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret')
 JWT_ALG = "HS256"
