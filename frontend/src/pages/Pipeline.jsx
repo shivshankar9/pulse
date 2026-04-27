@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import api from "../lib/api";
 import { Plus, X, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,7 +24,7 @@ const Pipeline = () => {
     const [overStage, setOverStage] = useState(null);
     const [drawerDeal, setDrawerDeal] = useState(null);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         const [d, c] = await Promise.all([api.get("/deals"), api.get("/contacts")]);
         setDeals(d.data);
         setContacts(c.data);
@@ -32,7 +32,7 @@ const Pipeline = () => {
             const updated = d.data.find((x) => x.id === drawerDeal.id);
             if (updated) setDrawerDeal(updated);
         }
-    };
+    }, [drawerDeal]);
     useEffect(() => { load(); }, [load]);
 
     const save = async (e) => {

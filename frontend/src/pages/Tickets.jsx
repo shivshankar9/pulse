@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import api from "../lib/api";
 import { Plus, Trash2, MessageSquarePlus, Send, AlertTriangle, Lock, Globe, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -44,7 +44,7 @@ const Tickets = () => {
     const [showCanned, setShowCanned] = useState(false);
     const [aiBusy, setAiBusy] = useState(false);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         const [t, c, u, g, f, cn] = await Promise.all([
             api.get("/tickets"), api.get("/contacts"),
             api.get("/users").catch(() => ({ data: [] })),
@@ -57,7 +57,7 @@ const Tickets = () => {
             const upd = t.data.find(x => x.id === selected.id);
             if (upd) setSelected(upd);
         }
-    };
+    }, [selected]);
     useEffect(() => { load(); }, [load]);
 
     const save = async (e) => {
