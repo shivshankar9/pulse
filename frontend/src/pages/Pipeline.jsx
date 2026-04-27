@@ -33,7 +33,7 @@ const Pipeline = () => {
             if (updated) setDrawerDeal(updated);
         }
     };
-    useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+    useEffect(() => { load(); }, [load]);
 
     const save = async (e) => {
         e.preventDefault();
