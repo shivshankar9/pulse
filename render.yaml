@@ -1,15 +1,16 @@
 services:
   - type: web
     name: pulse-backend
-    env: python
+    runtime: python
     region: oregon
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11"
       - key: USE_MOCK_DB
-        value: true
+        value: "true"
       - key: DB_NAME
         value: pulse_crm
       - key: JWT_SECRET
