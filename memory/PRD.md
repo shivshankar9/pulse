@@ -7,7 +7,7 @@
 - **Backend**: FastAPI + Motor (MongoDB) with `/api` prefix (~1400 lines, ready to split into routers)
 - **Frontend**: React 19 + Tailwind 3 brutalist Swiss design
 - **Auth**: JWT (bcrypt + pyjwt) with role-resolved permissions
-- **AI**: Claude Sonnet 4.5 via emergentintegrations
+- **AI**: GPT-4 Turbo via OpenAI API
 - **Encryption**: Fernet for at-rest credential vault (`INTEGRATIONS_KEY`)
 - **DB collections**: users, roles, contacts, deals, activities, emails, tickets, channels, saved_views, integrations, messages, voice_calls, webhook_events, invitations, helpdesk_config, ticket_fields, canned_responses, groups
 

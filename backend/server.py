@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
 from cryptography.fernet import Fernet
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from openai import AsyncOpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,7 +27,7 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret')
 JWT_ALG = "HS256"
 JWT_EXP_DAYS = 7
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 INTEGRATIONS_KEY = os.environ.get('INTEGRATIONS_KEY')
 fernet = Fernet(INTEGRATIONS_KEY.encode()) if INTEGRATIONS_KEY else None
 
@@ -439,15 +439,22 @@ async def dashboard_stats(user=Depends(get_current_user)):
 
 # ---------- AI ----------
 async def _llm_chat(system: str, user_text: str, session_id: str) -> str:
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(500, "LLM key not configured")
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=system,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-    msg = UserMessage(text=user_text)
-    return await chat.send_message(msg)
+    if not OPENAI_API_KEY:
+        raise HTTPException(500, "OpenAI API key not configured")
+    
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    
+    response = await client.chat.completions.create(
+        model="gpt-4-turbo-preview",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text}
+        ],
+        temperature=0.7,
+        max_tokens=1000
+    )
+    
+    return response.choices[0].message.content
 
 @api_router.post("/ai/lead-score")
 async def ai_lead_score(payload: AILeadScoreIn, user=Depends(get_current_user)):
