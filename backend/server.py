@@ -28,7 +28,19 @@ if USE_MOCK_DB or not mongo_url:
     client = AsyncMongoMockClient()
     logging.warning("Using in-memory mock MongoDB — data will not persist between restarts")
 else:
-    client = AsyncIOMotorClient(mongo_url)
+    # Configure MongoDB client with SSL/TLS settings for Python 3.14 compatibility
+    import ssl
+    client = AsyncIOMotorClient(
+        mongo_url,
+        tls=True,
+        tlsAllowInvalidCertificates=False,
+        tlsAllowInvalidHostnames=False,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000,
+        retryWrites=True,
+        w='majority'
+    )
 
 db = client[os.environ.get('DB_NAME', 'pulse_crm')]
 
@@ -912,6 +924,11 @@ PROVIDER_KEYS = {
     "resend": ["api_key", "from_email"],
     "twilio": ["account_sid", "auth_token", "whatsapp_number", "voice_number"],
     "google": ["client_id", "client_secret", "refresh_token", "calendar_id"],
+    "smtp": ["host", "port", "username", "password", "from_email", "from_name"],
+    "sendgrid": ["api_key", "from_email", "from_name"],
+    "whatsapp_business": ["access_token", "phone_number_id", "business_account_id"],
+    "vonage": ["api_key", "api_secret", "application_id", "private_key"],
+    "messagebird": ["api_key", "originator"],
 }
 
 def mask(s: Optional[str]) -> str:
@@ -1000,33 +1017,136 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
         return {"ok": bool(cfg.get("client_id") and cfg.get("client_secret")), "provider": "google", "note": "OAuth flow setup required to fully connect"}
     raise HTTPException(400, "Unknown provider")
 
-# ---------- WhatsApp / Voice via Twilio ----------
+# ---------- WhatsApp / Voice - Multi-Provider Support ----------
 class WhatsAppSendIn(BaseModel):
     to: str  # E.164 like +15551234567
     body: str
     contact_id: Optional[str] = None
+    media_url: Optional[str] = None  # For images/videos
 
 @api_router.post("/whatsapp/send")
 async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission("tickets.write"))):
-    cfg = await get_decrypted_integration(user["id"], "twilio")
-    if not cfg or not cfg.get("whatsapp_number"):
-        raise HTTPException(400, "Twilio WhatsApp not configured")
-    try:
-        from twilio.rest import Client as TwClient
-        tw = TwClient(cfg["account_sid"], cfg["auth_token"])
-        msg = tw.messages.create(
-            from_=f"whatsapp:{cfg['whatsapp_number']}",
-            to=f"whatsapp:{payload.to}",
-            body=payload.body,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"Twilio send failed: {str(e)}")
+    """Send WhatsApp message using configured provider (Twilio, Vonage, MessageBird, or WhatsApp Business API)"""
+    
+    # Try providers in order of preference
+    providers = ["whatsapp_business", "messagebird", "vonage", "twilio"]
+    
+    sent = False
+    error = None
+    provider_used = None
+    message_id = None
+    
+    for provider in providers:
+        cfg = await get_decrypted_integration(user["id"], provider)
+        if not cfg:
+            continue
+            
+        try:
+            if provider == "twilio":
+                if not cfg.get("whatsapp_number"):
+                    continue
+                from twilio.rest import Client as TwClient
+                tw = TwClient(cfg["account_sid"], cfg["auth_token"])
+                msg = tw.messages.create(
+                    from_=f"whatsapp:{cfg['whatsapp_number']}",
+                    to=f"whatsapp:{payload.to}",
+                    body=payload.body,
+                )
+                message_id = msg.sid
+                sent = True
+                provider_used = "twilio"
+                break
+                
+            elif provider == "vonage":
+                if not cfg.get("whatsapp_number"):
+                    continue
+                import requests
+                response = requests.post(
+                    "https://messages-sandbox.nexmo.com/v1/messages",
+                    headers={
+                        "Authorization": f"Bearer {cfg['api_key']}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "from": cfg["whatsapp_number"],
+                        "to": payload.to,
+                        "message_type": "text",
+                        "text": payload.body,
+                        "channel": "whatsapp"
+                    }
+                )
+                if response.status_code == 200:
+                    message_id = response.json().get("message_uuid")
+                    sent = True
+                    provider_used = "vonage"
+                    break
+                    
+            elif provider == "messagebird":
+                if not cfg.get("whatsapp_channel_id"):
+                    continue
+                import requests
+                response = requests.post(
+                    "https://conversations.messagebird.com/v1/send",
+                    headers={
+                        "Authorization": f"AccessKey {cfg['api_key']}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "to": payload.to,
+                        "from": cfg["whatsapp_channel_id"],
+                        "type": "text",
+                        "content": {"text": payload.body}
+                    }
+                )
+                if response.status_code == 200:
+                    message_id = response.json().get("id")
+                    sent = True
+                    provider_used = "messagebird"
+                    break
+                    
+            elif provider == "whatsapp_business":
+                if not cfg.get("phone_number_id"):
+                    continue
+                import requests
+                response = requests.post(
+                    f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}/messages",
+                    headers={
+                        "Authorization": f"Bearer {cfg['access_token']}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": payload.to,
+                        "type": "text",
+                        "text": {"body": payload.body}
+                    }
+                )
+                if response.status_code == 200:
+                    message_id = response.json().get("messages", [{}])[0].get("id")
+                    sent = True
+                    provider_used = "whatsapp_business"
+                    break
+                    
+        except Exception as e:
+            error = str(e)
+            continue
+    
+    if not sent:
+        raise HTTPException(400, f"No WhatsApp provider configured. Configure Twilio, Vonage, MessageBird, or WhatsApp Business API in Settings. Error: {error}")
+    
     doc = {
-        "id": str(uuid.uuid4()), "owner_id": user["id"],
-        "channel": "whatsapp", "direction": "outbound",
-        "to": payload.to, "from": cfg["whatsapp_number"],
-        "body": payload.body, "sid": msg.sid, "status": msg.status,
-        "contact_id": payload.contact_id, "sent_at": now_utc_iso(),
+        "id": str(uuid.uuid4()), 
+        "owner_id": user["id"],
+        "channel": "whatsapp", 
+        "direction": "outbound",
+        "to": payload.to, 
+        "from": cfg.get("whatsapp_number") or cfg.get("phone_number_id"),
+        "body": payload.body, 
+        "message_id": message_id,
+        "provider": provider_used,
+        "status": "sent",
+        "contact_id": payload.contact_id, 
+        "sent_at": now_utc_iso(),
     }
     await db.messages.insert_one(doc)
     doc.pop("_id", None)
@@ -1394,6 +1514,746 @@ async def assign_ticket(tid: str, payload: TicketAssignIn, user=Depends(require_
     if res.matched_count == 0:
         raise HTTPException(404, "Not found")
     return await db.tickets.find_one({"id": tid}, {"_id": 0})
+
+# ---------- Custom Domain Management ----------
+class DomainIn(BaseModel):
+    domain: str
+    provider: Literal["resend", "sendgrid", "smtp"] = "resend"
+    verified: bool = False
+
+class DomainVerifyIn(BaseModel):
+    domain: str
+
+@api_router.get("/domains")
+async def list_domains(user=Depends(require_permission("settings.manage"))):
+    """List all custom domains configured for this workspace"""
+    items = await db.domains.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+@api_router.post("/domains")
+async def add_domain(payload: DomainIn, user=Depends(require_permission("settings.manage"))):
+    """Add a custom domain for sending emails"""
+    # Check if domain already exists
+    existing = await db.domains.find_one({"owner_id": user["id"], "domain": payload.domain})
+    if existing:
+        raise HTTPException(400, "Domain already added")
+    
+    domain_id = str(uuid.uuid4())
+    
+    # Generate DNS records based on provider
+    dns_records = []
+    if payload.provider == "resend":
+        dns_records = [
+            {"type": "TXT", "name": f"_resend.{payload.domain}", "value": f"resend-verify={domain_id[:16]}", "purpose": "Domain verification"},
+            {"type": "TXT", "name": payload.domain, "value": "v=spf1 include:_spf.resend.com ~all", "purpose": "SPF record"},
+            {"type": "TXT", "name": f"resend._domainkey.{payload.domain}", "value": "DKIM key will be provided after verification", "purpose": "DKIM signature"},
+            {"type": "TXT", "name": f"_dmarc.{payload.domain}", "value": "v=DMARC1; p=none; rua=mailto:dmarc@{payload.domain}", "purpose": "DMARC policy"},
+        ]
+    elif payload.provider == "sendgrid":
+        dns_records = [
+            {"type": "CNAME", "name": f"em{domain_id[:4]}.{payload.domain}", "value": "sendgrid.net", "purpose": "Email routing"},
+            {"type": "CNAME", "name": f"s1._domainkey.{payload.domain}", "value": "s1.domainkey.sendgrid.net", "purpose": "DKIM signature"},
+            {"type": "CNAME", "name": f"s2._domainkey.{payload.domain}", "value": "s2.domainkey.sendgrid.net", "purpose": "DKIM signature"},
+            {"type": "TXT", "name": payload.domain, "value": "v=spf1 include:sendgrid.net ~all", "purpose": "SPF record"},
+        ]
+    elif payload.provider == "smtp":
+        dns_records = [
+            {"type": "TXT", "name": payload.domain, "value": "v=spf1 a mx ~all", "purpose": "SPF record"},
+            {"type": "TXT", "name": f"_dmarc.{payload.domain}", "value": "v=DMARC1; p=quarantine; rua=mailto:dmarc@{payload.domain}", "purpose": "DMARC policy"},
+        ]
+    
+    doc = {
+        "id": domain_id,
+        "owner_id": user["id"],
+        "domain": payload.domain,
+        "provider": payload.provider,
+        "verified": False,
+        "dns_records": dns_records,
+        "verification_status": "pending",
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    
+    await db.domains.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.post("/domains/verify")
+async def verify_domain(payload: DomainVerifyIn, user=Depends(require_permission("settings.manage"))):
+    """Verify domain DNS records"""
+    domain_doc = await db.domains.find_one({"owner_id": user["id"], "domain": payload.domain}, {"_id": 0})
+    if not domain_doc:
+        raise HTTPException(404, "Domain not found")
+    
+    # Check DNS records
+    import dns.resolver
+    verification_results = []
+    all_verified = True
+    
+    try:
+        for record in domain_doc.get("dns_records", []):
+            try:
+                answers = dns.resolver.resolve(record["name"], record["type"])
+                found = False
+                for rdata in answers:
+                    if record["type"] == "TXT":
+                        if record["value"] in str(rdata):
+                            found = True
+                            break
+                    elif record["type"] == "CNAME":
+                        if record["value"] in str(rdata):
+                            found = True
+                            break
+                
+                verification_results.append({
+                    "record": record,
+                    "verified": found,
+                    "status": "verified" if found else "not_found"
+                })
+                
+                if not found:
+                    all_verified = False
+            except Exception as e:
+                verification_results.append({
+                    "record": record,
+                    "verified": False,
+                    "status": "error",
+                    "error": str(e)
+                })
+                all_verified = False
+    except Exception as e:
+        raise HTTPException(500, f"DNS verification failed: {str(e)}")
+    
+    # Update domain verification status
+    await db.domains.update_one(
+        {"owner_id": user["id"], "domain": payload.domain},
+        {"$set": {
+            "verified": all_verified,
+            "verification_status": "verified" if all_verified else "pending",
+            "verification_results": verification_results,
+            "last_verified_at": now_utc_iso(),
+            "updated_at": now_utc_iso()
+        }}
+    )
+    
+    return {
+        "domain": payload.domain,
+        "verified": all_verified,
+        "results": verification_results
+    }
+
+@api_router.delete("/domains/{domain_id}")
+async def delete_domain(domain_id: str, user=Depends(require_permission("settings.manage"))):
+    """Remove a custom domain"""
+    await db.domains.delete_one({"id": domain_id, "owner_id": user["id"]})
+    return {"ok": True}
+
+@api_router.get("/domains/{domain_id}/dns")
+async def get_domain_dns(domain_id: str, user=Depends(require_permission("settings.manage"))):
+    """Get DNS configuration instructions for a domain"""
+    domain_doc = await db.domains.find_one({"id": domain_id, "owner_id": user["id"]}, {"_id": 0})
+    if not domain_doc:
+        raise HTTPException(404, "Domain not found")
+    
+    return {
+        "domain": domain_doc["domain"],
+        "provider": domain_doc["provider"],
+        "dns_records": domain_doc.get("dns_records", []),
+        "instructions": {
+            "cloudflare": "Go to DNS settings → Add records → Copy values from above",
+            "godaddy": "Go to DNS Management → Add records → Use the values provided",
+            "namecheap": "Go to Advanced DNS → Add New Record → Enter the details",
+            "route53": "Go to Hosted Zones → Create Record → Add each DNS record"
+        }
+    }
+
+# ---------- Enhanced Email Sending with Custom Domains ----------
+class EmailSendIn(BaseModel):
+    to: List[EmailStr]
+    cc: Optional[List[EmailStr]] = []
+    bcc: Optional[List[EmailStr]] = []
+    subject: str
+    body: str
+    html: Optional[str] = None
+    from_domain: Optional[str] = None  # Use custom domain
+    from_name: Optional[str] = None
+    contact_id: Optional[str] = None
+    deal_id: Optional[str] = None
+    attachments: Optional[List[dict]] = []
+
+@api_router.post("/emails/send")
+async def send_email_advanced(payload: EmailSendIn, user=Depends(require_permission("emails.write"))):
+    """Send email using configured provider (Resend, SendGrid, or SMTP) with custom domain support"""
+    
+    # Determine which domain to use
+    from_email = None
+    from_name = payload.from_name or user.get("name", "")
+    
+    if payload.from_domain:
+        # Check if domain is verified
+        domain_doc = await db.domains.find_one({
+            "owner_id": user["id"],
+            "domain": payload.from_domain,
+            "verified": True
+        })
+        if not domain_doc:
+            raise HTTPException(400, f"Domain {payload.from_domain} not verified")
+        
+        # Use custom domain
+        from_email = f"{user.get('name', 'hello').lower().replace(' ', '.')}@{payload.from_domain}"
+        provider = domain_doc["provider"]
+    else:
+        # Use default integration
+        provider = "resend"  # Default
+    
+    # Get integration config
+    cfg = await get_decrypted_integration(user["id"], provider)
+    
+    sent_via = "log"
+    message_id = None
+    error = None
+    
+    try:
+        if provider == "resend":
+            if not cfg or not cfg.get("api_key"):
+                raise HTTPException(400, "Resend not configured")
+            
+            import resend as resend_sdk
+            resend_sdk.api_key = cfg["api_key"]
+            
+            from_email = from_email or cfg.get("from_email") or f"{from_name.lower().replace(' ', '.')}@onboarding.resend.dev"
+            
+            email_data = {
+                "from": f"{from_name} <{from_email}>",
+                "to": payload.to,
+                "subject": payload.subject,
+                "html": payload.html or payload.body.replace("\n", "<br/>"),
+            }
+            
+            if payload.cc:
+                email_data["cc"] = payload.cc
+            if payload.bcc:
+                email_data["bcc"] = payload.bcc
+            
+            r = resend_sdk.Emails.send(email_data)
+            message_id = (r or {}).get("id") if isinstance(r, dict) else getattr(r, "id", None)
+            sent_via = "resend"
+            
+        elif provider == "sendgrid":
+            if not cfg or not cfg.get("api_key"):
+                raise HTTPException(400, "SendGrid not configured")
+            
+            import sendgrid
+            from sendgrid.helpers.mail import Mail, Email, To, Content
+            
+            sg = sendgrid.SendGridAPIClient(api_key=cfg["api_key"])
+            
+            from_email = from_email or cfg.get("from_email")
+            
+            message = Mail(
+                from_email=Email(from_email, from_name),
+                to_emails=[To(email) for email in payload.to],
+                subject=payload.subject,
+                html_content=Content("text/html", payload.html or payload.body.replace("\n", "<br/>"))
+            )
+            
+            response = sg.send(message)
+            message_id = response.headers.get("X-Message-Id")
+            sent_via = "sendgrid"
+            
+        elif provider == "smtp":
+            if not cfg or not cfg.get("host"):
+                raise HTTPException(400, "SMTP not configured")
+            
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            
+            from_email = from_email or cfg.get("from_email")
+            
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = payload.subject
+            msg["From"] = f"{from_name} <{from_email}>"
+            msg["To"] = ", ".join(payload.to)
+            
+            if payload.cc:
+                msg["Cc"] = ", ".join(payload.cc)
+            
+            # Add body
+            part1 = MIMEText(payload.body, "plain")
+            part2 = MIMEText(payload.html or payload.body.replace("\n", "<br/>"), "html")
+            msg.attach(part1)
+            msg.attach(part2)
+            
+            # Send via SMTP
+            with smtplib.SMTP(cfg["host"], int(cfg.get("port", 587))) as server:
+                server.starttls()
+                server.login(cfg["username"], cfg["password"])
+                server.send_message(msg)
+            
+            message_id = str(uuid.uuid4())
+            sent_via = "smtp"
+        
+    except Exception as e:
+        error = str(e)
+        sent_via = "failed"
+        logger.error(f"Email send failed: {error}")
+    
+    # Log email
+    eid = str(uuid.uuid4())
+    doc = {
+        "id": eid,
+        "owner_id": user["id"],
+        "to": payload.to[0] if payload.to else None,
+        "to_list": payload.to,
+        "cc": payload.cc,
+        "bcc": payload.bcc,
+        "subject": payload.subject,
+        "body": payload.body,
+        "html": payload.html,
+        "from_email": from_email,
+        "from_name": from_name,
+        "from_domain": payload.from_domain,
+        "contact_id": payload.contact_id,
+        "deal_id": payload.deal_id,
+        "sent_at": now_utc_iso(),
+        "sent_via": sent_via,
+        "provider": provider,
+        "message_id": message_id,
+        "error": error,
+        "opened": False,
+    }
+    
+    await db.emails.insert_one(doc)
+    doc.pop("_id", None)
+    
+    if error:
+        raise HTTPException(500, f"Failed to send email: {error}")
+    
+    return doc
+
+# ---------- Email Templates ----------
+class EmailTemplateIn(BaseModel):
+    name: str
+    subject: str
+    body: str
+    html: Optional[str] = None
+    category: Optional[str] = "general"
+    variables: List[str] = []  # e.g., ["contact_name", "company", "deal_value"]
+
+@api_router.get("/email-templates")
+async def list_email_templates(user=Depends(get_current_user)):
+    """List all email templates"""
+    items = await db.email_templates.find({"owner_id": user["id"]}, {"_id": 0}).sort("name", 1).to_list(200)
+    return items
+
+@api_router.post("/email-templates")
+async def create_email_template(payload: EmailTemplateIn, user=Depends(require_permission("emails.write"))):
+    """Create a new email template"""
+    doc = {
+        **payload.model_dump(),
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    await db.email_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.put("/email-templates/{template_id}")
+async def update_email_template(template_id: str, payload: EmailTemplateIn, user=Depends(require_permission("emails.write"))):
+    """Update an email template"""
+    res = await db.email_templates.update_one(
+        {"id": template_id, "owner_id": user["id"]},
+        {"$set": {**payload.model_dump(), "updated_at": now_utc_iso()}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Template not found")
+    return await db.email_templates.find_one({"id": template_id}, {"_id": 0})
+
+@api_router.delete("/email-templates/{template_id}")
+async def delete_email_template(template_id: str, user=Depends(require_permission("emails.write"))):
+    """Delete an email template"""
+    await db.email_templates.delete_one({"id": template_id, "owner_id": user["id"]})
+    return {"ok": True}
+
+@api_router.post("/email-templates/{template_id}/render")
+async def render_email_template(template_id: str, variables: dict, user=Depends(get_current_user)):
+    """Render an email template with variables"""
+    template = await db.email_templates.find_one({"id": template_id, "owner_id": user["id"]}, {"_id": 0})
+    if not template:
+        raise HTTPException(404, "Template not found")
+    
+    # Simple variable replacement
+    subject = template["subject"]
+    body = template["body"]
+    html = template.get("html", "")
+    
+    for key, value in variables.items():
+        placeholder = f"{{{{{key}}}}}"
+        subject = subject.replace(placeholder, str(value))
+        body = body.replace(placeholder, str(value))
+        if html:
+            html = html.replace(placeholder, str(value))
+    
+    return {
+        "subject": subject,
+        "body": body,
+        "html": html
+    }
+
+# ---------- WhatsApp Business API (Direct - No Twilio) ----------
+class WhatsAppBusinessSendIn(BaseModel):
+    to: str  # Phone number with country code
+    message: str
+    contact_id: Optional[str] = None
+
+@api_router.post("/whatsapp-business/send")
+async def whatsapp_business_send(payload: WhatsAppBusinessSendIn, user=Depends(require_permission("tickets.write"))):
+    """Send WhatsApp message using Meta's WhatsApp Business API (no Twilio needed)"""
+    cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+    if not cfg or not cfg.get("access_token"):
+        raise HTTPException(400, "WhatsApp Business API not configured")
+    
+    try:
+        import requests
+        
+        url = f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}/messages"
+        headers = {
+            "Authorization": f"Bearer {cfg['access_token']}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "messaging_product": "whatsapp",
+            "to": payload.to,
+            "type": "text",
+            "text": {"body": payload.message}
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Log message
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "channel": "whatsapp_business",
+            "direction": "outbound",
+            "to": payload.to,
+            "body": payload.message,
+            "message_id": result.get("messages", [{}])[0].get("id"),
+            "status": "sent",
+            "contact_id": payload.contact_id,
+            "sent_at": now_utc_iso(),
+            "provider": "whatsapp_business"
+        }
+        await db.messages.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+        
+    except Exception as e:
+        raise HTTPException(500, f"WhatsApp send failed: {str(e)}")
+
+@api_router.get("/whatsapp-business/messages")
+async def whatsapp_business_list(user=Depends(get_current_user)):
+    """List WhatsApp Business messages"""
+    items = await db.messages.find(
+        {"owner_id": user["id"], "channel": "whatsapp_business"}, 
+        {"_id": 0}
+    ).sort("sent_at", -1).to_list(500)
+    return items
+
+@api_router.post("/webhooks/whatsapp-business/{owner_id}")
+async def webhook_whatsapp_business(owner_id: str, request: Request):
+    """Webhook for WhatsApp Business API (Meta)"""
+    try:
+        data = await request.json()
+        
+        # Verify webhook (first time setup)
+        if request.method == "GET":
+            verify_token = request.query_params.get("hub.verify_token")
+            challenge = request.query_params.get("hub.challenge")
+            if verify_token == os.environ.get("WHATSAPP_VERIFY_TOKEN", "pulse_crm_verify"):
+                return {"hub.challenge": challenge}
+        
+        # Process incoming message
+        if data.get("object") == "whatsapp_business_account":
+            for entry in data.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    
+                    # Incoming message
+                    for message in value.get("messages", []):
+                        from_number = message.get("from")
+                        text = message.get("text", {}).get("body", "")
+                        message_id = message.get("id")
+                        
+                        # Find or create contact
+                        contact = await db.contacts.find_one(
+                            {"phone": from_number, "owner_id": owner_id}, 
+                            {"_id": 0}
+                        )
+                        
+                        # Log message
+                        await db.messages.insert_one({
+                            "id": str(uuid.uuid4()),
+                            "owner_id": owner_id,
+                            "channel": "whatsapp_business",
+                            "direction": "inbound",
+                            "from": from_number,
+                            "body": text,
+                            "message_id": message_id,
+                            "received_at": now_utc_iso(),
+                            "contact_id": contact["id"] if contact else None,
+                            "provider": "whatsapp_business"
+                        })
+                        
+                        # Auto-create ticket
+                        await db.tickets.insert_one({
+                            "id": str(uuid.uuid4()),
+                            "owner_id": owner_id,
+                            "subject": f"WhatsApp: {text[:60]}",
+                            "description": text,
+                            "channel": "whatsapp",
+                            "status": "open",
+                            "priority": "medium",
+                            "contact_id": contact["id"] if contact else None,
+                            "requester_name": contact["name"] if contact else from_number,
+                            "requester_email": contact.get("email") if contact else None,
+                            "comments": [],
+                            "created_at": now_utc_iso(),
+                            "updated_at": now_utc_iso(),
+                        })
+                    
+                    # Status updates
+                    for status in value.get("statuses", []):
+                        message_id = status.get("id")
+                        status_value = status.get("status")
+                        await db.messages.update_one(
+                            {"message_id": message_id},
+                            {"$set": {"status": status_value, "updated_at": now_utc_iso()}}
+                        )
+        
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"WhatsApp Business webhook error: {str(e)}")
+        return {"ok": False, "error": str(e)}
+
+# ---------- WebRTC Calling (Browser-based, No Server) ----------
+class WebRTCCallIn(BaseModel):
+    contact_id: str
+    type: Literal["audio", "video"] = "audio"
+
+@api_router.post("/webrtc/initiate")
+async def webrtc_initiate_call(payload: WebRTCCallIn, user=Depends(get_current_user)):
+    """Initiate WebRTC call (browser-to-browser, no server needed)"""
+    contact = await db.contacts.find_one(
+        {"id": payload.contact_id, "owner_id": user["id"]}, 
+        {"_id": 0}
+    )
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+    
+    # Generate call session
+    call_id = str(uuid.uuid4())
+    call_doc = {
+        "id": call_id,
+        "owner_id": user["id"],
+        "contact_id": payload.contact_id,
+        "type": payload.type,
+        "status": "initiated",
+        "initiated_by": user["id"],
+        "initiated_at": now_utc_iso(),
+        "provider": "webrtc",
+        "signaling_data": None,  # Will be updated with WebRTC offer/answer
+    }
+    await db.voice_calls.insert_one(call_doc)
+    call_doc.pop("_id", None)
+    
+    return {
+        "call_id": call_id,
+        "contact": contact,
+        "type": payload.type,
+        "instructions": "Use WebRTC in browser to establish peer connection"
+    }
+
+@api_router.post("/webrtc/signal")
+async def webrtc_signal(call_id: str, signaling_data: dict, user=Depends(get_current_user)):
+    """Exchange WebRTC signaling data (offer/answer/ICE candidates)"""
+    await db.voice_calls.update_one(
+        {"id": call_id, "owner_id": user["id"]},
+        {"$set": {"signaling_data": signaling_data, "updated_at": now_utc_iso()}}
+    )
+    return {"ok": True}
+
+@api_router.get("/webrtc/calls")
+async def webrtc_list_calls(user=Depends(get_current_user)):
+    """List WebRTC calls"""
+    items = await db.voice_calls.find(
+        {"owner_id": user["id"], "provider": "webrtc"}, 
+        {"_id": 0}
+    ).sort("initiated_at", -1).to_list(500)
+    return items
+
+# ---------- Vonage (Nexmo) Integration ----------
+class VonageSMSIn(BaseModel):
+    to: str
+    text: str
+    contact_id: Optional[str] = None
+
+@api_router.post("/vonage/sms")
+async def vonage_send_sms(payload: VonageSMSIn, user=Depends(require_permission("tickets.write"))):
+    """Send SMS via Vonage (alternative to Twilio)"""
+    cfg = await get_decrypted_integration(user["id"], "vonage")
+    if not cfg or not cfg.get("api_key"):
+        raise HTTPException(400, "Vonage not configured")
+    
+    try:
+        import requests
+        
+        url = "https://rest.nexmo.com/sms/json"
+        data = {
+            "api_key": cfg["api_key"],
+            "api_secret": cfg["api_secret"],
+            "to": payload.to,
+            "from": "PulseCRM",
+            "text": payload.text
+        }
+        
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Log message
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "channel": "sms",
+            "direction": "outbound",
+            "to": payload.to,
+            "body": payload.text,
+            "message_id": result.get("messages", [{}])[0].get("message-id"),
+            "status": result.get("messages", [{}])[0].get("status"),
+            "contact_id": payload.contact_id,
+            "sent_at": now_utc_iso(),
+            "provider": "vonage"
+        }
+        await db.messages.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+        
+    except Exception as e:
+        raise HTTPException(500, f"Vonage SMS failed: {str(e)}")
+
+@api_router.post("/vonage/call")
+async def vonage_make_call(to: str, contact_id: Optional[str] = None, user=Depends(require_permission("activities.write"))):
+    """Make voice call via Vonage"""
+    cfg = await get_decrypted_integration(user["id"], "vonage")
+    if not cfg or not cfg.get("api_key"):
+        raise HTTPException(400, "Vonage not configured")
+    
+    try:
+        import requests
+        import jwt as pyjwt
+        from datetime import datetime, timezone
+        
+        # Generate JWT for Vonage
+        payload_jwt = {
+            "application_id": cfg["application_id"],
+            "iat": datetime.now(timezone.utc).timestamp(),
+            "exp": datetime.now(timezone.utc).timestamp() + 3600,
+            "jti": str(uuid.uuid4())
+        }
+        token = pyjwt.encode(payload_jwt, cfg["private_key"], algorithm="RS256")
+        
+        url = "https://api.nexmo.com/v1/calls"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "to": [{"type": "phone", "number": to}],
+            "from": {"type": "phone", "number": "YOUR_VONAGE_NUMBER"},
+            "answer_url": ["https://your-backend.onrender.com/api/vonage/answer"],
+            "event_url": ["https://your-backend.onrender.com/api/vonage/events"]
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Log call
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "call_id": result.get("uuid"),
+            "to": to,
+            "status": result.get("status"),
+            "contact_id": contact_id,
+            "initiated_at": now_utc_iso(),
+            "direction": "outbound",
+            "provider": "vonage"
+        }
+        await db.voice_calls.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+        
+    except Exception as e:
+        raise HTTPException(500, f"Vonage call failed: {str(e)}")
+
+# ---------- MessageBird Integration ----------
+class MessageBirdSMSIn(BaseModel):
+    to: str
+    body: str
+    contact_id: Optional[str] = None
+
+@api_router.post("/messagebird/sms")
+async def messagebird_send_sms(payload: MessageBirdSMSIn, user=Depends(require_permission("tickets.write"))):
+    """Send SMS via MessageBird (alternative to Twilio)"""
+    cfg = await get_decrypted_integration(user["id"], "messagebird")
+    if not cfg or not cfg.get("api_key"):
+        raise HTTPException(400, "MessageBird not configured")
+    
+    try:
+        import requests
+        
+        url = "https://rest.messagebird.com/messages"
+        headers = {
+            "Authorization": f"AccessKey {cfg['api_key']}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "originator": cfg.get("originator", "PulseCRM"),
+            "recipients": [payload.to],
+            "body": payload.body
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Log message
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "channel": "sms",
+            "direction": "outbound",
+            "to": payload.to,
+            "body": payload.body,
+            "message_id": result.get("id"),
+            "status": "sent",
+            "contact_id": payload.contact_id,
+            "sent_at": now_utc_iso(),
+            "provider": "messagebird"
+        }
+        await db.messages.insert_one(doc)
+        doc.pop("_id", None)
+        return doc
+        
+    except Exception as e:
+        raise HTTPException(500, f"MessageBird SMS failed: {str(e)}")
 
 # ---------- Mount ----------
 app.include_router(api_router)

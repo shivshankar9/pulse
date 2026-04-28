@@ -14,3 +14,5 @@ python-dotenv>=1.2.0
 python-multipart>=0.0.24
 resend>=2.29.0
 uvicorn>=0.25.0
+sendgrid>=6.11.0
+twilio>=9.0.0
