@@ -3036,15 +3036,18 @@ async def create_ticket_from_whatsapp(phone: str, payload: WhatsAppCreateTicketI
         contact = sync_res.get("contact")
 
     # Build description with recent messages
-    recent = await db.messages.find(
-        {
-            "owner_id": user["id"],
-            "channel": {"$in": ["whatsapp", "whatsapp_business"]},
-            "$or": [{"from": p}, {"from": f"whatsapp:{p}"}, {"to": p}, {"to": f"whatsapp:{p}"}],
-        },
-        {"_id": 0},
-    ).sort("sent_at", -1).to_list(max(1, payload.include_last_messages))
-    recent.reverse()
+    n_include = max(0, int(payload.include_last_messages or 0))
+    recent = []
+    if n_include > 0:
+        recent = await db.messages.find(
+            {
+                "owner_id": user["id"],
+                "channel": {"$in": ["whatsapp", "whatsapp_business"]},
+                "$or": [{"from": p}, {"from": f"whatsapp:{p}"}, {"to": p}, {"to": f"whatsapp:{p}"}],
+            },
+            {"_id": 0},
+        ).sort("sent_at", -1).to_list(n_include)
+        recent.reverse()
     lines = []
     for m in recent:
         dir_label = "Customer" if m.get("direction") == "inbound" else "Agent"
