@@ -1,4 +1,4 @@
-# Pulse CRM
+# Pulse CRM Q
 
 A modern Customer Relationship Management system built with React and FastAPI.
 
