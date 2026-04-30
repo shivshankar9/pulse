@@ -90,6 +90,8 @@ export default function DomainSettings() {
       toast.error('Failed to remove frontend domain');
     }
   };
+
+  const addDomain = async () => {
     if (!newDomain) {
       toast.error('Please enter a domain name');
       return;
