@@ -6,7 +6,7 @@ import {
     MessageCircle, Send, Search, Phone, RefreshCw, Sparkles, Copy, Check,
     ShieldAlert, Loader2, Trash2, User, Clock, CheckCheck, AlertCircle,
     Settings as SettingsIcon, Link as LinkIcon, X, FileText, Plus, Edit2,
-    BookTemplate, Info
+    BookTemplate, Info, UserPlus, Ticket, UserCheck, Users, Zap, Circle
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -72,6 +72,21 @@ const WhatsAppInbox = () => {
     const [editingTemplate, setEditingTemplate] = useState(null);
     const [templateForm, setTemplateForm] = useState({ name: "", category: "utility", language: "en_US", body: "", meta_template_name: "" });
 
+    // Team presence + assignment
+    const [team, setTeam] = useState([]);
+    const [showAssign, setShowAssign] = useState(false);
+    const [autoAssigning, setAutoAssigning] = useState(false);
+
+    // Sync contact modal
+    const [showSyncContact, setShowSyncContact] = useState(false);
+    const [contactForm, setContactForm] = useState({ name: "", email: "", company: "", notes: "" });
+    const [syncing, setSyncing] = useState(false);
+
+    // Create ticket modal
+    const [showCreateTicket, setShowCreateTicket] = useState(false);
+    const [ticketForm, setTicketForm] = useState({ subject: "", description: "", priority: "medium", include_last_messages: 5 });
+    const [creatingTicket, setCreatingTicket] = useState(false);
+
     const threadEndRef = useRef(null);
     const pollRef = useRef(null);
 
@@ -93,9 +108,18 @@ const WhatsAppInbox = () => {
         }
     };
 
+    const loadTeam = async () => {
+        try {
+            const { data } = await api.get("/presence");
+            setTeam(data || []);
+        } catch (e) {
+            // silent
+        }
+    };
+
     const loadConversations = async () => {
         try {
-            const { data } = await api.get("/whatsapp/conversations");
+            const { data } = await api.get("/whatsapp/conversations-v2");
             setConversations(data || []);
         } catch (e) {
             // silent during polling
@@ -120,6 +144,13 @@ const WhatsAppInbox = () => {
         loadIntegrations();
         loadConversations();
         loadTemplates();
+        loadTeam();
+    }, []);
+
+    // Refresh team presence every 20s so online indicators stay fresh
+    useEffect(() => {
+        const iv = setInterval(loadTeam, 20000);
+        return () => clearInterval(iv);
     }, []);
 
     // Poll conversations + active thread
@@ -362,6 +393,119 @@ const WhatsAppInbox = () => {
 
     const hasAnyInbound = useMemo(() => messages.some((m) => m.direction === "inbound"), [messages]);
 
+    // ---------- Assignment ----------
+    const onlineCount = useMemo(() => team.filter((t) => t.online).length, [team]);
+
+    const assignTo = async (uid) => {
+        if (!selectedPhone) return;
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/assign`,
+                { user_id: uid }
+            );
+            toast.success(uid ? `Assigned to ${data.assigned_to_name || "agent"}` : "Unassigned");
+            setShowAssign(false);
+            loadConversations();
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Assign failed");
+        }
+    };
+
+    const autoAssign = async () => {
+        if (!selectedPhone) return;
+        setAutoAssigning(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/auto-assign`
+            );
+            toast.success(`Auto-assigned to ${data.assigned_to_name} (${data.candidates_online} online)`);
+            setShowAssign(false);
+            loadConversations();
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Auto-assign failed — is anyone online?");
+        } finally {
+            setAutoAssigning(false);
+        }
+    };
+
+    // ---------- Sync contact ----------
+    const openSyncContact = () => {
+        setContactForm({
+            name: selectedConv?.contact_name || "",
+            email: selectedConv?.contact_email || "",
+            company: "",
+            notes: "",
+        });
+        setShowSyncContact(true);
+    };
+
+    const syncContact = async () => {
+        if (!selectedPhone) return;
+        setSyncing(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/sync-contact`,
+                {
+                    name: contactForm.name || null,
+                    email: contactForm.email || null,
+                    company: contactForm.company || null,
+                    notes: contactForm.notes || null,
+                }
+            );
+            toast.success(data.created ? `Lead created: ${data.contact?.name}` : `Contact updated: ${data.contact?.name}`);
+            setShowSyncContact(false);
+            loadConversations();
+            // Refresh thread to pick up contact linkage
+            loadThread(selectedPhone);
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Sync failed");
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    // ---------- Create ticket ----------
+    const openCreateTicket = () => {
+        // Default subject from last inbound
+        const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+        const defaultSubject = lastInbound
+            ? `WhatsApp: ${(lastInbound.body || "").slice(0, 60)}`
+            : `WhatsApp conversation with ${selectedConv?.contact_name || selectedPhone}`;
+        setTicketForm({
+            subject: defaultSubject,
+            description: "",
+            priority: "medium",
+            include_last_messages: 5,
+        });
+        setShowCreateTicket(true);
+    };
+
+    const createTicketFromChat = async () => {
+        if (!selectedPhone) return;
+        if (!ticketForm.subject.trim()) {
+            toast.error("Subject is required");
+            return;
+        }
+        setCreatingTicket(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/create-ticket`,
+                {
+                    subject: ticketForm.subject.trim(),
+                    description: ticketForm.description || null,
+                    priority: ticketForm.priority,
+                    include_last_messages: Number(ticketForm.include_last_messages) || 5,
+                }
+            );
+            toast.success(`Ticket created: ${data.ticket?.subject}`);
+            setShowCreateTicket(false);
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Create ticket failed");
+        } finally {
+            setCreatingTicket(false);
+        }
+    };
+
     return (
         <div className="flex h-[calc(100vh-0px)]" data-testid="whatsapp-page">
             {/* Left pane: conversations list */}
@@ -501,6 +645,13 @@ const WhatsAppInbox = () => {
                                                 {c.phone}
                                             </div>
                                         )}
+                                        {c.assigned_to_name && (
+                                            <div className="text-[9px] font-mono uppercase tracking-widest text-brand mb-0.5 flex items-center gap-1">
+                                                <UserCheck className="w-2.5 h-2.5" />
+                                                {c.assigned_to_name}
+                                                {c.auto_assigned && <Zap className="w-2.5 h-2.5" />}
+                                            </div>
+                                        )}
                                         <div className="flex items-center justify-between gap-2">
                                             <div className="text-xs text-inkSecondary truncate">
                                                 {c.last_direction === "outbound" && <span className="mr-1">→</span>}
@@ -552,31 +703,124 @@ const WhatsAppInbox = () => {
                 ) : (
                     <>
                         {/* Thread header */}
-                        <div className="bg-white border-b-2 border-ink p-4 flex items-center justify-between gap-3">
+                        <div className="bg-white border-b-2 border-ink p-4 flex items-center justify-between gap-3 flex-wrap">
                             <div className="flex items-center gap-3 min-w-0">
                                 <div className="w-10 h-10 border-2 border-ink grid place-items-center bg-bg text-[11px] font-bold flex-shrink-0">
                                     {initials(selectedConv?.contact_name, selectedPhone)}
                                 </div>
                                 <div className="min-w-0">
-                                    <div className="font-heading font-black text-lg tracking-tighter truncate">
+                                    <div className="font-heading font-black text-lg tracking-tighter truncate flex items-center gap-2">
                                         {selectedConv?.contact_name || selectedPhone}
+                                        {selectedConv?.assigned_to_name && (
+                                            <span
+                                                data-testid="wa-assigned-chip"
+                                                className="text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 bg-brand/10 border border-brand text-ink flex items-center gap-1"
+                                            >
+                                                <UserCheck className="w-3 h-3" />
+                                                {selectedConv.assigned_to_name}
+                                                {selectedConv.auto_assigned && <Zap className="w-3 h-3" title="Auto-assigned" />}
+                                            </span>
+                                        )}
                                     </div>
-                                    <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary flex items-center gap-2">
+                                    <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary flex items-center gap-2 flex-wrap">
                                         <Phone className="w-3 h-3" /> {selectedPhone}
                                         {selectedConv?.contact_id && (
                                             <Link
                                                 to="/app/contacts"
-                                                className="text-brand hover:underline ml-2"
+                                                className="text-brand hover:underline"
                                                 data-testid="wa-open-contact"
                                             >
                                                 <User className="w-3 h-3 inline mr-0.5" />
                                                 contact
                                             </Link>
                                         )}
+                                        <span className="flex items-center gap-1">
+                                            <Circle className={`w-2 h-2 ${onlineCount > 0 ? "fill-ok text-ok" : "fill-inkSecondary text-inkSecondary"}`} />
+                                            {onlineCount} agent{onlineCount === 1 ? "" : "s"} online
+                                        </span>
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                    data-testid="wa-sync-contact-btn"
+                                    onClick={openSyncContact}
+                                    className="border-2 border-ink bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1"
+                                    title={selectedConv?.contact_id ? "Update contact" : "Sync as lead / contact"}
+                                >
+                                    <UserPlus className="w-3 h-3" />
+                                    {selectedConv?.contact_id ? "Contact" : "Sync lead"}
+                                </button>
+                                <button
+                                    data-testid="wa-create-ticket-btn"
+                                    onClick={openCreateTicket}
+                                    className="border-2 border-ink bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1"
+                                    title="Create a support ticket from this conversation"
+                                >
+                                    <Ticket className="w-3 h-3" /> Ticket
+                                </button>
+                                <div className="relative">
+                                    <button
+                                        data-testid="wa-assign-btn"
+                                        onClick={() => { loadTeam(); setShowAssign(!showAssign); }}
+                                        className={`border-2 border-ink px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 ${
+                                            selectedConv?.assigned_to ? "bg-brand text-white border-brand" : "bg-white hover:bg-ink hover:text-white"
+                                        }`}
+                                    >
+                                        <Users className="w-3 h-3" />
+                                        {selectedConv?.assigned_to_name ? "Reassign" : "Assign"}
+                                    </button>
+                                    {showAssign && (
+                                        <div
+                                            className="absolute right-0 top-full mt-1 bg-white border-2 border-ink shadow-lg w-72 z-40"
+                                            data-testid="wa-assign-menu"
+                                        >
+                                            <button
+                                                data-testid="wa-auto-assign"
+                                                onClick={autoAssign}
+                                                disabled={autoAssigning || onlineCount === 0}
+                                                className="w-full text-left px-3 py-2.5 border-b-2 border-ink bg-brand/10 hover:bg-brand hover:text-white text-[11px] font-bold uppercase tracking-widest flex items-center gap-2 disabled:opacity-50"
+                                            >
+                                                {autoAssigning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                                                Auto-assign · online only ({onlineCount})
+                                            </button>
+                                            <div className="max-h-64 overflow-y-auto">
+                                                {team.length === 0 ? (
+                                                    <div className="p-3 text-xs text-inkSecondary text-center">No team members</div>
+                                                ) : (
+                                                    team.map((t) => (
+                                                        <button
+                                                            key={t.id}
+                                                            data-testid={`wa-assign-${t.id}`}
+                                                            onClick={() => assignTo(t.id)}
+                                                            className="w-full text-left px-3 py-2 hover:bg-bg flex items-center gap-2 border-b border-ink/10"
+                                                        >
+                                                            <Circle className={`w-2.5 h-2.5 ${t.online ? "fill-ok text-ok" : "fill-inkSecondary text-inkSecondary"}`} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-bold truncate">{t.name || t.email}</div>
+                                                                <div className="text-[9px] font-mono uppercase tracking-widest text-inkSecondary">
+                                                                    {t.role} · {t.online ? "online" : "offline"}
+                                                                </div>
+                                                            </div>
+                                                            {selectedConv?.assigned_to === t.id && (
+                                                                <Check className="w-3 h-3 text-brand" />
+                                                            )}
+                                                        </button>
+                                                    ))
+                                                )}
+                                            </div>
+                                            {selectedConv?.assigned_to && (
+                                                <button
+                                                    data-testid="wa-unassign"
+                                                    onClick={() => assignTo(null)}
+                                                    className="w-full px-3 py-2 bg-bg hover:bg-bad hover:text-white text-[10px] font-bold uppercase tracking-widest border-t-2 border-ink"
+                                                >
+                                                    Unassign
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                                 <select
                                     data-testid="wa-provider-select"
                                     value={provider}
@@ -586,7 +830,7 @@ const WhatsAppInbox = () => {
                                 >
                                     <option value="auto">Auto</option>
                                     <option value="whatsapp_business" disabled={!integrations?.whatsapp_business?.configured}>
-                                        Meta WA Biz {integrations?.whatsapp_business?.configured ? "✓" : "—"}
+                                        Meta {integrations?.whatsapp_business?.configured ? "✓" : "—"}
                                     </option>
                                     <option value="twilio" disabled={!integrations?.twilio?.configured}>
                                         Twilio {integrations?.twilio?.configured ? "✓" : "—"}
@@ -1113,6 +1357,180 @@ const WhatsAppInbox = () => {
                     </div>
                 </div>
             )}
+
+            {/* Sync Contact Modal */}
+            {showSyncContact && (
+                <div className="fixed inset-0 bg-ink/60 grid place-items-center z-50 p-4" onClick={() => setShowSyncContact(false)} data-testid="wa-sync-contact-modal">
+                    <div className="bg-white border-2 border-ink p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <div className="text-[11px] font-mono uppercase tracking-widest text-inkSecondary">// sync.lead</div>
+                                <h3 className="font-heading font-black text-2xl tracking-tighter">
+                                    {selectedConv?.contact_id ? "Update contact" : "Sync as lead"}
+                                </h3>
+                                <p className="text-xs text-inkSecondary mt-1">
+                                    Phone <span className="font-mono">{selectedPhone}</span> will be tagged <span className="bg-bg px-1 font-mono">whatsapp</span>, <span className="bg-bg px-1 font-mono">lead</span>.
+                                </p>
+                            </div>
+                            <button onClick={() => setShowSyncContact(false)} className="border-2 border-ink p-1.5 hover:bg-ink hover:text-white">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Name</label>
+                                <input
+                                    data-testid="wa-sync-name"
+                                    autoFocus
+                                    value={contactForm.name}
+                                    onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                                    placeholder="Alex Parker"
+                                    className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Email</label>
+                                    <input
+                                        data-testid="wa-sync-email"
+                                        type="email"
+                                        value={contactForm.email}
+                                        onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                                        placeholder="alex@acme.com"
+                                        className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Company</label>
+                                    <input
+                                        data-testid="wa-sync-company"
+                                        value={contactForm.company}
+                                        onChange={(e) => setContactForm({ ...contactForm, company: e.target.value })}
+                                        placeholder="Acme Inc."
+                                        className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Notes</label>
+                                <textarea
+                                    data-testid="wa-sync-notes"
+                                    value={contactForm.notes}
+                                    onChange={(e) => setContactForm({ ...contactForm, notes: e.target.value })}
+                                    rows={2}
+                                    placeholder="Context about this lead…"
+                                    className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand resize-y"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex gap-2 justify-end mt-5">
+                            <button onClick={() => setShowSyncContact(false)} className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white">
+                                Cancel
+                            </button>
+                            <button
+                                data-testid="wa-sync-submit"
+                                onClick={syncContact}
+                                disabled={syncing}
+                                className="bg-brand text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink disabled:opacity-50 flex items-center gap-1.5"
+                            >
+                                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+                                {selectedConv?.contact_id ? "Update contact" : "Create lead"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Create Ticket Modal */}
+            {showCreateTicket && (
+                <div className="fixed inset-0 bg-ink/60 grid place-items-center z-50 p-4" onClick={() => setShowCreateTicket(false)} data-testid="wa-create-ticket-modal">
+                    <div className="bg-white border-2 border-ink p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <div className="text-[11px] font-mono uppercase tracking-widest text-inkSecondary">// ticket.from.chat</div>
+                                <h3 className="font-heading font-black text-2xl tracking-tighter">New ticket from chat</h3>
+                                <p className="text-xs text-inkSecondary mt-1">
+                                    Linked to <span className="font-bold">{selectedConv?.contact_name || selectedPhone}</span>.
+                                    Assignee → current assignment{selectedConv?.assigned_to_name ? ` (${selectedConv.assigned_to_name})` : " (unassigned)"}.
+                                </p>
+                            </div>
+                            <button onClick={() => setShowCreateTicket(false)} className="border-2 border-ink p-1.5 hover:bg-ink hover:text-white">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Subject</label>
+                                <input
+                                    data-testid="wa-ticket-subject"
+                                    autoFocus
+                                    value={ticketForm.subject}
+                                    onChange={(e) => setTicketForm({ ...ticketForm, subject: e.target.value })}
+                                    placeholder="Customer question about billing…"
+                                    className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Priority</label>
+                                    <select
+                                        data-testid="wa-ticket-priority"
+                                        value={ticketForm.priority}
+                                        onChange={(e) => setTicketForm({ ...ticketForm, priority: e.target.value })}
+                                        className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand"
+                                    >
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="urgent">Urgent</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Include last N msgs</label>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={50}
+                                        data-testid="wa-ticket-include"
+                                        value={ticketForm.include_last_messages}
+                                        onChange={(e) => setTicketForm({ ...ticketForm, include_last_messages: e.target.value })}
+                                        className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand font-mono"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Extra description (optional)</label>
+                                <textarea
+                                    data-testid="wa-ticket-description"
+                                    value={ticketForm.description}
+                                    onChange={(e) => setTicketForm({ ...ticketForm, description: e.target.value })}
+                                    rows={3}
+                                    placeholder="Any extra context for the agent handling this ticket…"
+                                    className="w-full border-2 border-ink bg-bg px-3 py-2 text-sm outline-none focus:border-brand resize-y"
+                                />
+                            </div>
+                            <div className="bg-bg border-l-2 border-brand p-2 text-[11px] text-inkSecondary">
+                                Ticket will be created with <span className="font-bold">channel = whatsapp</span> and the last {ticketForm.include_last_messages || 0} messages as context. If the contact doesn't exist yet, it will be created automatically as a lead.
+                            </div>
+                        </div>
+                        <div className="flex gap-2 justify-end mt-5">
+                            <button onClick={() => setShowCreateTicket(false)} className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white">
+                                Cancel
+                            </button>
+                            <button
+                                data-testid="wa-ticket-submit"
+                                onClick={createTicketFromChat}
+                                disabled={creatingTicket}
+                                className="bg-brand text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink disabled:opacity-50 flex items-center gap-1.5"
+                            >
+                                {creatingTicket ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
+                                Create ticket
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 };

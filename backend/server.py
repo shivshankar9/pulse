@@ -2778,6 +2778,325 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
 
 
 
+# ---------- Presence (who is online) ----------
+class PresenceHeartbeatIn(BaseModel):
+    status: Literal["online", "away", "busy", "offline"] = "online"
+
+
+@api_router.post("/presence/heartbeat")
+async def presence_heartbeat(payload: Optional[PresenceHeartbeatIn] = None, user=Depends(get_current_user)):
+    """Called by the frontend every ~30s to record that the user is online."""
+    st = (payload.status if payload else "online") or "online"
+    await db.presence.update_one(
+        {"user_id": user["id"]},
+        {"$set": {
+            "user_id": user["id"],
+            "owner_id": user.get("owner_id") or user["id"],
+            "status": st,
+            "last_seen": now_utc_iso(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True, "status": st}
+
+
+@api_router.post("/presence/offline")
+async def presence_offline(user=Depends(get_current_user)):
+    await db.presence.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"status": "offline", "last_seen": now_utc_iso()}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+def _is_online_iso(last_seen_iso: Optional[str], window_seconds: int = 120) -> bool:
+    if not last_seen_iso:
+        return False
+    try:
+        ts = datetime.fromisoformat(last_seen_iso.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - ts).total_seconds() < window_seconds
+    except Exception:
+        return False
+
+
+@api_router.get("/presence")
+async def list_presence(user=Depends(get_current_user)):
+    """Return all users (for this workspace) with their online status."""
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    presence_rows = await db.presence.find({}, {"_id": 0}).to_list(1000)
+    p_map = {p.get("user_id"): p for p in presence_rows}
+    result = []
+    for u in users:
+        p = p_map.get(u.get("id")) or {}
+        result.append({
+            "id": u.get("id"),
+            "name": u.get("name"),
+            "email": u.get("email"),
+            "role": u.get("role"),
+            "status": p.get("status") if _is_online_iso(p.get("last_seen")) else "offline",
+            "last_seen": p.get("last_seen"),
+            "online": _is_online_iso(p.get("last_seen")) and (p.get("status") or "online") == "online",
+        })
+    return result
+
+
+# ---------- WhatsApp chat assignment ----------
+class AssignIn(BaseModel):
+    user_id: Optional[str] = None  # None = unassign
+
+
+@api_router.post("/whatsapp/conversations/{phone}/assign")
+async def assign_whatsapp_thread(phone: str, payload: AssignIn, user=Depends(require_permission("tickets.write"))):
+    p = phone.replace("whatsapp:", "").strip()
+    if payload.user_id:
+        # Verify user exists
+        target = await db.users.find_one({"id": payload.user_id}, {"_id": 0, "password_hash": 0})
+        if not target:
+            raise HTTPException(404, "User not found")
+        await db.whatsapp_assignments.update_one(
+            {"owner_id": user["id"], "phone": p},
+            {"$set": {
+                "owner_id": user["id"],
+                "phone": p,
+                "assigned_to": payload.user_id,
+                "assigned_to_name": target.get("name"),
+                "assigned_by": user["id"],
+                "assigned_at": now_utc_iso(),
+            }},
+            upsert=True,
+        )
+        return {"ok": True, "assigned_to": payload.user_id, "assigned_to_name": target.get("name")}
+    await db.whatsapp_assignments.delete_one({"owner_id": user["id"], "phone": p})
+    return {"ok": True, "assigned_to": None}
+
+
+@api_router.post("/whatsapp/conversations/{phone}/auto-assign")
+async def auto_assign_whatsapp_thread(phone: str, user=Depends(require_permission("tickets.write"))):
+    """Auto-assign the thread to an online agent using round-robin (least-recently-assigned first)."""
+    p = phone.replace("whatsapp:", "").strip()
+    # Find online users
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    presence_rows = await db.presence.find({}, {"_id": 0}).to_list(1000)
+    p_map = {pr.get("user_id"): pr for pr in presence_rows}
+    online = [
+        u for u in users
+        if _is_online_iso((p_map.get(u.get("id")) or {}).get("last_seen"))
+        and ((p_map.get(u.get("id")) or {}).get("status") or "online") == "online"
+    ]
+    if not online:
+        raise HTTPException(400, "No agents are online. Try again shortly or assign manually.")
+
+    # Count current assignments per user to find least-loaded
+    assignments = await db.whatsapp_assignments.find({"owner_id": user["id"]}, {"_id": 0}).to_list(1000)
+    counts = {}
+    for a in assignments:
+        uid = a.get("assigned_to")
+        if uid:
+            counts[uid] = counts.get(uid, 0) + 1
+    # Pick the online user with the fewest current assignments (ties broken randomly)
+    online.sort(key=lambda u: (counts.get(u.get("id"), 0), random.random()))
+    chosen = online[0]
+    await db.whatsapp_assignments.update_one(
+        {"owner_id": user["id"], "phone": p},
+        {"$set": {
+            "owner_id": user["id"],
+            "phone": p,
+            "assigned_to": chosen.get("id"),
+            "assigned_to_name": chosen.get("name"),
+            "assigned_by": user["id"],
+            "assigned_at": now_utc_iso(),
+            "auto_assigned": True,
+        }},
+        upsert=True,
+    )
+    return {
+        "ok": True,
+        "assigned_to": chosen.get("id"),
+        "assigned_to_name": chosen.get("name"),
+        "candidates_online": len(online),
+    }
+
+
+# Patch the conversations list to enrich with assignment info
+_original_conversations_fn = None
+try:
+    _original_conversations_fn = whatsapp_conversations  # noqa: F821
+except NameError:
+    pass
+
+
+@api_router.get("/whatsapp/conversations-v2")
+async def whatsapp_conversations_v2(user=Depends(get_current_user)):
+    """Enriched conversations list including assignment info. Kept as -v2 to avoid disturbing existing callers."""
+    convs = await whatsapp_conversations(user=user)  # type: ignore
+    assignments = await db.whatsapp_assignments.find({"owner_id": user["id"]}, {"_id": 0}).to_list(2000)
+    a_map = {a.get("phone"): a for a in assignments}
+    for c in convs:
+        a = a_map.get(c.get("phone"))
+        if a:
+            c["assigned_to"] = a.get("assigned_to")
+            c["assigned_to_name"] = a.get("assigned_to_name")
+            c["auto_assigned"] = a.get("auto_assigned", False)
+        else:
+            c["assigned_to"] = None
+            c["assigned_to_name"] = None
+    return convs
+
+
+# ---------- Sync WhatsApp chat to Contact (lead) ----------
+class WhatsAppSyncContactIn(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    company: Optional[str] = None
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+@api_router.post("/whatsapp/conversations/{phone}/sync-contact")
+async def sync_whatsapp_contact(phone: str, payload: WhatsAppSyncContactIn, user=Depends(get_current_user)):
+    """Create or update a contact from a WhatsApp thread, tag as 'lead', and backfill contact_id on messages."""
+    p = phone.replace("whatsapp:", "").strip()
+    existing = await db.contacts.find_one({"owner_id": user["id"], "phone": p}, {"_id": 0})
+    tags = list(set((payload.tags or []) + ["whatsapp", "lead"]))
+    name = (payload.name or "").strip()
+    if not name and not existing:
+        # Derive a friendly default
+        name = f"WhatsApp lead {p[-4:]}"
+    if existing:
+        update = {"updated_at": now_utc_iso()}
+        if name:
+            update["name"] = name
+        if payload.email:
+            update["email"] = payload.email
+        if payload.company is not None:
+            update["company"] = payload.company
+        if payload.notes is not None:
+            update["notes"] = payload.notes
+        update["tags"] = list(set((existing.get("tags") or []) + tags))
+        await db.contacts.update_one({"id": existing["id"], "owner_id": user["id"]}, {"$set": update})
+        contact_id = existing["id"]
+        created = False
+    else:
+        contact_id = str(uuid.uuid4())
+        doc = {
+            "id": contact_id,
+            "owner_id": user["id"],
+            "name": name,
+            "email": payload.email,
+            "phone": p,
+            "company": payload.company,
+            "tags": tags,
+            "notes": payload.notes or f"Synced from WhatsApp thread on {now_utc_iso()}",
+            "custom": {},
+            "created_at": now_utc_iso(),
+            "updated_at": now_utc_iso(),
+        }
+        await db.contacts.insert_one(doc)
+        created = True
+
+    # Backfill contact_id on any messages in this thread that don't have one
+    await db.messages.update_many(
+        {
+            "owner_id": user["id"],
+            "channel": {"$in": ["whatsapp", "whatsapp_business"]},
+            "$or": [{"from": p}, {"from": f"whatsapp:{p}"}, {"to": p}, {"to": f"whatsapp:{p}"}],
+            "$and": [{"$or": [{"contact_id": None}, {"contact_id": {"$exists": False}}]}],
+        },
+        {"$set": {"contact_id": contact_id}},
+    )
+
+    out = await db.contacts.find_one({"id": contact_id, "owner_id": user["id"]}, {"_id": 0})
+    return {"ok": True, "contact": out, "created": created}
+
+
+# ---------- Create Ticket directly from WhatsApp thread ----------
+class WhatsAppCreateTicketIn(BaseModel):
+    subject: str
+    description: Optional[str] = None
+    priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    assignee_id: Optional[str] = None
+    include_last_messages: int = 5  # Include last N messages as description context
+
+
+@api_router.post("/whatsapp/conversations/{phone}/create-ticket")
+async def create_ticket_from_whatsapp(phone: str, payload: WhatsAppCreateTicketIn, user=Depends(get_current_user)):
+    """Create a ticket linked to the contact of this WhatsApp thread.
+    If no contact exists, auto-sync one first (as a lead)."""
+    p = phone.replace("whatsapp:", "").strip()
+
+    # Ensure contact exists
+    contact = await db.contacts.find_one({"owner_id": user["id"], "phone": p}, {"_id": 0})
+    if not contact:
+        sync_res = await sync_whatsapp_contact(
+            p,
+            WhatsAppSyncContactIn(),
+            user=user,
+        )
+        contact = sync_res.get("contact")
+
+    # Build description with recent messages
+    recent = await db.messages.find(
+        {
+            "owner_id": user["id"],
+            "channel": {"$in": ["whatsapp", "whatsapp_business"]},
+            "$or": [{"from": p}, {"from": f"whatsapp:{p}"}, {"to": p}, {"to": f"whatsapp:{p}"}],
+        },
+        {"_id": 0},
+    ).sort("sent_at", -1).to_list(max(1, payload.include_last_messages))
+    recent.reverse()
+    lines = []
+    for m in recent:
+        dir_label = "Customer" if m.get("direction") == "inbound" else "Agent"
+        ts = m.get("sent_at") or m.get("received_at") or ""
+        lines.append(f"[{ts}] {dir_label}: {m.get('body', '')}")
+    context_block = "\n".join(lines)
+
+    desc = payload.description or ""
+    if context_block:
+        desc = (desc + ("\n\n" if desc else "") + "--- WhatsApp conversation ---\n" + context_block).strip()
+
+    # Determine assignee: explicit → conversation assignment → _auto_assign("whatsapp")
+    assignee = payload.assignee_id
+    if not assignee:
+        a = await db.whatsapp_assignments.find_one({"owner_id": user["id"], "phone": p}, {"_id": 0})
+        if a and a.get("assigned_to"):
+            assignee = a["assigned_to"]
+    if not assignee:
+        try:
+            assignee = await _auto_assign("whatsapp")  # type: ignore
+        except Exception:
+            assignee = None
+
+    cfg = await db.helpdesk_config.find_one({}, {"_id": 0}) or {}
+    sla_cfg = cfg.get("sla") or SLAConfigIn().model_dump()
+    sla_dates = _sla_due_dates(payload.priority, sla_cfg)
+
+    tdoc = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "subject": payload.subject,
+        "description": desc,
+        "contact_id": (contact or {}).get("id"),
+        "status": "open",
+        "priority": payload.priority,
+        "channel": "whatsapp",
+        "assignee_id": assignee,
+        "group_id": None,
+        "custom": {"whatsapp_phone": p},
+        "comments": [],
+        **sla_dates,
+        "first_responded_at": None,
+        "resolved_at": None,
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    await db.tickets.insert_one(tdoc)
+    tdoc.pop("_id", None)
+    return {"ok": True, "ticket": tdoc}
+
+
+
 # ---------- Mount ----------
 app.include_router(api_router)
 
