@@ -1,6 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from starlette.responses import Response
+from starlette.responses import Response, PlainTextResponse
 import csv
 import io
 from dotenv import load_dotenv
@@ -2011,7 +2011,9 @@ async def webhook_whatsapp_business_verify(owner_id: str, request: Request):
         # Check if verify token matches
         expected_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "pulse_crm_verify")
         if verify_token == expected_token:
-            return int(challenge) if challenge else {"status": "verified"}
+            # WhatsApp expects the challenge as plain text, not JSON
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse(challenge)
         else:
             raise HTTPException(status_code=403, detail="Invalid verify token")
     except Exception as e:
