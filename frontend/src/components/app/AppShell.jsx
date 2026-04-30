@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio, Settings as SettingsIcon } from "lucide-react";
+import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio, Settings as SettingsIcon, MessageCircle } from "lucide-react";
 
 const navItems = [
     { to: "/app", label: "Dashboard", icon: LayoutGrid, end: true, testid: "nav-dashboard" },
@@ -9,6 +9,7 @@ const navItems = [
     { to: "/app/activities", label: "Activities", icon: ListChecks, testid: "nav-activities" },
     { to: "/app/emails", label: "Emails", icon: Mail, testid: "nav-emails" },
     { to: "/app/tickets", label: "Tickets", icon: LifeBuoy, testid: "nav-tickets" },
+    { to: "/app/whatsapp", label: "WhatsApp", icon: MessageCircle, testid: "nav-whatsapp" },
     { to: "/app/channels", label: "Channels", icon: Radio, testid: "nav-channels" },
     { to: "/app/assistant", label: "AI Assistant", icon: Sparkles, testid: "nav-assistant" },
     { to: "/app/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings", perm: "settings.manage" },

@@ -12,6 +12,7 @@ import Emails from "./pages/Emails";
 import AIAssistant from "./pages/AIAssistant";
 import Tickets from "./pages/Tickets";
 import Channels from "./pages/Channels";
+import WhatsAppInbox from "./pages/WhatsApp";
 import Settings from "./pages/Settings";
 import PublicSupport from "./pages/PublicSupport";
 import AcceptInvite from "./pages/AcceptInvite";
@@ -42,6 +43,7 @@ function App() {
                         <Route path="/app/emails" element={<Emails />} />
                         <Route path="/app/tickets" element={<Tickets />} />
                         <Route path="/app/channels" element={<Channels />} />
+                        <Route path="/app/whatsapp" element={<WhatsAppInbox />} />
                         <Route path="/app/settings" element={<Settings />} />
                         <Route path="/app/assistant" element={<AIAssistant />} />
                     </Route>

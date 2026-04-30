@@ -107,6 +107,16 @@ const PROVIDER_DEFS = {
             { key: "voice_number", label: "Voice Number (E.164)", placeholder: "+15551234567" },
         ],
     },
+    whatsapp_business: {
+        label: "Meta WhatsApp Business API",
+        icon: MessageCircle,
+        desc: "Direct Meta integration (no Twilio). Get creds at developers.facebook.com → WhatsApp → API Setup.",
+        fields: [
+            { key: "access_token", label: "Access Token", placeholder: "EAAB•••••", secret: true },
+            { key: "phone_number_id", label: "Phone Number ID", placeholder: "1234567890" },
+            { key: "business_account_id", label: "Business Account ID", placeholder: "1234567890" },
+        ],
+    },
     google: {
         label: "Google (Calendar + Gmail)",
         icon: Calendar,

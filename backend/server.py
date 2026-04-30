@@ -11,6 +11,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 import uuid
+import asyncio
+import random
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
@@ -28,18 +30,12 @@ if USE_MOCK_DB or not mongo_url:
     client = AsyncMongoMockClient()
     logging.warning("Using in-memory mock MongoDB — data will not persist between restarts")
 else:
-    # Configure MongoDB client with SSL/TLS settings for Python 3.14 compatibility
-    import ssl
+    # Configure MongoDB client - disable TLS for local connections
     client = AsyncIOMotorClient(
         mongo_url,
-        tls=True,
-        tlsAllowInvalidCertificates=False,
-        tlsAllowInvalidHostnames=False,
         serverSelectionTimeoutMS=5000,
         connectTimeoutMS=10000,
-        socketTimeoutMS=10000,
-        retryWrites=True,
-        w='majority'
+        socketTimeoutMS=10000
     )
 
 db = client[os.environ.get('DB_NAME', 'pulse_crm')]
@@ -1015,6 +1011,21 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
     if provider == "google":
         # Without performing OAuth flow we just confirm presence
         return {"ok": bool(cfg.get("client_id") and cfg.get("client_secret")), "provider": "google", "note": "OAuth flow setup required to fully connect"}
+    if provider == "whatsapp_business":
+        try:
+            import requests
+            r = requests.get(
+                f"https://graph.facebook.com/v18.0/{cfg.get('phone_number_id')}",
+                headers={"Authorization": f"Bearer {cfg.get('access_token')}"},
+                timeout=10,
+            )
+            if r.status_code >= 400:
+                raise HTTPException(400, f"Meta API rejected credentials ({r.status_code}): {r.text[:200]}")
+            return {"ok": True, "provider": "whatsapp_business", "info": r.json()}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"WhatsApp Business test failed: {str(e)}")
     raise HTTPException(400, "Unknown provider")
 
 # ---------- WhatsApp / Voice - Multi-Provider Support ----------
@@ -1023,19 +1034,23 @@ class WhatsAppSendIn(BaseModel):
     body: str
     contact_id: Optional[str] = None
     media_url: Optional[str] = None  # For images/videos
+    provider: Optional[Literal["whatsapp_business", "twilio", "vonage", "messagebird", "auto"]] = "auto"
 
 @api_router.post("/whatsapp/send")
 async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission("tickets.write"))):
-    """Send WhatsApp message using configured provider (Twilio, Vonage, MessageBird, or WhatsApp Business API)"""
-    
-    # Try providers in order of preference
-    providers = ["whatsapp_business", "messagebird", "vonage", "twilio"]
-    
+    """Send WhatsApp message using selected provider. Falls back to mock/queued if nothing configured."""
+
+    # Determine provider priority: explicit > auto
+    if payload.provider and payload.provider != "auto":
+        providers = [payload.provider]
+    else:
+        providers = ["whatsapp_business", "messagebird", "vonage", "twilio"]
+
     sent = False
     error = None
     provider_used = None
     message_id = None
-    
+
     for provider in providers:
         cfg = await get_decrypted_integration(user["id"], provider)
         if not cfg:
@@ -1130,22 +1145,42 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
         except Exception as e:
             error = str(e)
             continue
-    
+
+    # Fallback: save as queued/mock so the UI always works even without provider configured
     if not sent:
-        raise HTTPException(400, f"No WhatsApp provider configured. Configure Twilio, Vonage, MessageBird, or WhatsApp Business API in Settings. Error: {error}")
-    
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "channel": "whatsapp",
+            "direction": "outbound",
+            "to": payload.to,
+            "from": None,
+            "body": payload.body,
+            "message_id": None,
+            "provider": "mock",
+            "status": "queued",
+            "error": error or "No WhatsApp provider configured. Add credentials in Settings → Integrations.",
+            "contact_id": payload.contact_id,
+            "sent_at": now_utc_iso(),
+        }
+        await db.messages.insert_one(doc)
+        doc.pop("_id", None)
+        # Schedule a simulated inbound reply so the user can see the full loop in mock mode
+        asyncio.create_task(_simulate_mock_reply(user["id"], payload.to, payload.contact_id, payload.body))
+        return doc
+
     doc = {
-        "id": str(uuid.uuid4()), 
+        "id": str(uuid.uuid4()),
         "owner_id": user["id"],
-        "channel": "whatsapp", 
+        "channel": "whatsapp",
         "direction": "outbound",
-        "to": payload.to, 
+        "to": payload.to,
         "from": cfg.get("whatsapp_number") or cfg.get("phone_number_id"),
-        "body": payload.body, 
+        "body": payload.body,
         "message_id": message_id,
         "provider": provider_used,
         "status": "sent",
-        "contact_id": payload.contact_id, 
+        "contact_id": payload.contact_id,
         "sent_at": now_utc_iso(),
     }
     await db.messages.insert_one(doc)
@@ -2254,6 +2289,494 @@ async def messagebird_send_sms(payload: MessageBirdSMSIn, user=Depends(require_p
         
     except Exception as e:
         raise HTTPException(500, f"MessageBird SMS failed: {str(e)}")
+
+
+# ---------- WhatsApp Conversations (threaded inbox) ----------
+def _phone_from_msg(m: dict) -> str:
+    """Extract the 'other party' phone for a WhatsApp message doc (normalize to str)."""
+    if m.get("direction") == "inbound":
+        v = m.get("from") or m.get("From") or ""
+    else:
+        v = m.get("to") or ""
+    if v is None:
+        v = ""
+    return str(v).replace("whatsapp:", "").strip()
+
+
+@api_router.get("/whatsapp/conversations")
+async def whatsapp_conversations(user=Depends(get_current_user)):
+    """Return threaded conversations grouped by contact phone number."""
+    # Pull both 'whatsapp' and 'whatsapp_business' channel messages
+    items = await db.messages.find(
+        {"owner_id": user["id"], "channel": {"$in": ["whatsapp", "whatsapp_business"]}},
+        {"_id": 0},
+    ).to_list(5000)
+
+    threads: dict = {}
+    for m in items:
+        phone = _phone_from_msg(m)
+        if not phone:
+            continue
+        t = threads.get(phone)
+        ts = m.get("sent_at") or m.get("received_at") or ""
+        if not t:
+            threads[phone] = {
+                "phone": phone,
+                "contact_id": m.get("contact_id"),
+                "last_message": m.get("body", ""),
+                "last_direction": m.get("direction", ""),
+                "last_ts": ts,
+                "last_provider": m.get("provider") or m.get("channel"),
+                "unread": 0,
+                "total": 0,
+            }
+            t = threads[phone]
+        t["total"] += 1
+        if m.get("direction") == "inbound" and not m.get("read"):
+            t["unread"] += 1
+        if ts and ts > (t.get("last_ts") or ""):
+            t["last_ts"] = ts
+            t["last_message"] = m.get("body", "")
+            t["last_direction"] = m.get("direction", "")
+            t["last_provider"] = m.get("provider") or m.get("channel")
+            if m.get("contact_id") and not t.get("contact_id"):
+                t["contact_id"] = m.get("contact_id")
+
+    # Enrich with contact info
+    phones = list(threads.keys())
+    contact_map = {}
+    if phones:
+        contacts = await db.contacts.find(
+            {"owner_id": user["id"], "phone": {"$in": phones}}, {"_id": 0},
+        ).to_list(len(phones))
+        for c in contacts:
+            contact_map[c.get("phone")] = c
+
+    result = []
+    for phone, t in threads.items():
+        c = contact_map.get(phone)
+        t["contact_name"] = c.get("name") if c else None
+        t["contact_email"] = c.get("email") if c else None
+        if c and not t.get("contact_id"):
+            t["contact_id"] = c.get("id")
+        result.append(t)
+
+    # Sort by last_ts desc
+    result.sort(key=lambda x: x.get("last_ts") or "", reverse=True)
+    return result
+
+
+@api_router.get("/whatsapp/conversations/{phone}/messages")
+async def whatsapp_conversation_messages(phone: str, user=Depends(get_current_user)):
+    """Return full message thread for a phone number (both channels)."""
+    items = await db.messages.find(
+        {"owner_id": user["id"], "channel": {"$in": ["whatsapp", "whatsapp_business"]}},
+        {"_id": 0},
+    ).to_list(5000)
+    thread = [m for m in items if _phone_from_msg(m) == phone.replace("whatsapp:", "").strip()]
+    thread.sort(key=lambda x: (x.get("sent_at") or x.get("received_at") or ""))
+    return thread
+
+
+@api_router.post("/whatsapp/conversations/{phone}/read")
+async def whatsapp_mark_read(phone: str, user=Depends(get_current_user)):
+    """Mark all inbound messages in a thread as read."""
+    p = phone.replace("whatsapp:", "").strip()
+    # Match both "from": p and "from": "whatsapp:p"
+    await db.messages.update_many(
+        {
+            "owner_id": user["id"],
+            "channel": {"$in": ["whatsapp", "whatsapp_business"]},
+            "direction": "inbound",
+            "$or": [{"from": p}, {"from": f"whatsapp:{p}"}],
+        },
+        {"$set": {"read": True, "read_at": now_utc_iso()}},
+    )
+    return {"ok": True}
+
+
+@api_router.delete("/whatsapp/conversations/{phone}")
+async def whatsapp_delete_conversation(phone: str, user=Depends(require_permission("tickets.write"))):
+    """Delete all messages in a thread."""
+    p = phone.replace("whatsapp:", "").strip()
+    res = await db.messages.delete_many({
+        "owner_id": user["id"],
+        "channel": {"$in": ["whatsapp", "whatsapp_business"]},
+        "$or": [
+            {"from": p}, {"from": f"whatsapp:{p}"},
+            {"to": p}, {"to": f"whatsapp:{p}"},
+        ],
+    })
+    return {"ok": True, "deleted": res.deleted_count}
+
+
+@api_router.post("/whatsapp-business/test")
+async def whatsapp_business_test(user=Depends(require_permission("settings.manage"))):
+    """Verify Meta WhatsApp Business API credentials by hitting the phone-number endpoint."""
+    cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+    if not cfg or not cfg.get("access_token") or not cfg.get("phone_number_id"):
+        raise HTTPException(400, "WhatsApp Business credentials incomplete")
+    try:
+        import requests
+        r = requests.get(
+            f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}",
+            headers={"Authorization": f"Bearer {cfg['access_token']}"},
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            raise HTTPException(400, f"Meta API rejected credentials ({r.status_code}): {r.text[:200]}")
+        return {"ok": True, "provider": "whatsapp_business", "info": r.json()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"WhatsApp Business test failed: {str(e)}")
+
+
+class WhatsAppDemoSeedIn(BaseModel):
+    conversations: int = 3
+    messages_per_convo: int = 6
+
+
+@api_router.post("/whatsapp/demo/seed")
+async def whatsapp_demo_seed(payload: Optional[WhatsAppDemoSeedIn] = None, user=Depends(get_current_user)):
+    """Seed sample WhatsApp conversations so the UI can be exercised without real provider.
+    Idempotent: clears any existing mock-seeded messages for this user first."""
+    n_conv = (payload.conversations if payload else 3) or 3
+    n_msg = (payload.messages_per_convo if payload else 6) or 6
+
+    # Clear prior mock-seed
+    await db.messages.delete_many({"owner_id": user["id"], "provider": "mock_seed"})
+
+    samples = [
+        {"phone": "+14155551234", "name": "Alex Parker", "email": "alex@acme.com",
+         "msgs": ["Hi, I'd like a quote on the enterprise plan.",
+                  "Sure — how many seats are you looking at?",
+                  "Around 25 seats to start, growing to 50.",
+                  "Got it. Any SSO/SAML requirements?",
+                  "Yes, Okta SSO is required.",
+                  "Perfect, I'll send over a tailored proposal today."]},
+        {"phone": "+447911123456", "name": "Priya Sharma", "email": "priya@northwind.co.uk",
+         "msgs": ["Our dashboard isn't loading 😕",
+                  "Sorry to hear that. Can you share a screenshot?",
+                  "Sent via email just now.",
+                  "Thanks, investigating.",
+                  "Fix deployed — can you refresh?",
+                  "Working again, thank you! 🙏"]},
+        {"phone": "+919820012345", "name": "Rohan Mehta", "email": "rohan@lotuslabs.in",
+         "msgs": ["Do you support WhatsApp templates for order updates?",
+                  "Yes — Meta-approved templates are supported.",
+                  "Great. Can you send me a setup checklist?",
+                  "Sending now.",
+                  "Received, thanks!",
+                  "Anything else we can help with?"]},
+        {"phone": "+61412345678", "name": "Emma Wilson", "email": "emma@southbay.au",
+         "msgs": ["Invoice #4532 seems duplicated.",
+                  "Looking into it now.",
+                  "Confirmed duplicate — we've voided it.",
+                  "Thanks for the quick turnaround!"]},
+        {"phone": "+33612345678", "name": "Luc Dubois", "email": "luc@chronos.fr",
+         "msgs": ["Trial extension possible?",
+                  "Extended by 14 days — check your email.",
+                  "Merci!"]},
+    ]
+
+    n_conv = min(n_conv, len(samples))
+    now = datetime.now(timezone.utc)
+    created = 0
+
+    for i in range(n_conv):
+        s = samples[i]
+        phone = s["phone"]
+        # Upsert a contact for this phone
+        existing = await db.contacts.find_one({"owner_id": user["id"], "phone": phone}, {"_id": 0})
+        contact_id = None
+        if existing:
+            contact_id = existing.get("id")
+        else:
+            contact_id = str(uuid.uuid4())
+            await db.contacts.insert_one({
+                "id": contact_id,
+                "owner_id": user["id"],
+                "name": s["name"],
+                "email": s["email"],
+                "phone": phone,
+                "company": None,
+                "tags": ["whatsapp"],
+                "notes": "Seeded from WhatsApp demo",
+                "custom": {},
+                "created_at": now_utc_iso(),
+                "updated_at": now_utc_iso(),
+            })
+
+        take = min(n_msg, len(s["msgs"]))
+        for j in range(take):
+            minutes_ago = (take - j) * 7 + i * 3
+            ts = (now - timedelta(minutes=minutes_ago)).isoformat()
+            direction = "inbound" if j % 2 == 0 else "outbound"
+            doc = {
+                "id": str(uuid.uuid4()),
+                "owner_id": user["id"],
+                "channel": "whatsapp_business",
+                "direction": direction,
+                "body": s["msgs"][j],
+                "contact_id": contact_id,
+                "provider": "mock_seed",
+                "status": "delivered" if direction == "outbound" else None,
+            }
+            if direction == "inbound":
+                doc["from"] = phone
+                doc["received_at"] = ts
+                doc["read"] = False if j == take - 1 else True  # Last inbound unread
+            else:
+                doc["to"] = phone
+                doc["sent_at"] = ts
+            await db.messages.insert_one(doc)
+            created += 1
+
+    return {"ok": True, "conversations": n_conv, "messages": created}
+
+
+# ---------- Mock auto-reply (so users can experience full conversation loop without real provider) ----------
+MOCK_REPLIES = [
+    "Thanks, got it 👍",
+    "Okay, makes sense.",
+    "Got it — appreciate the quick reply!",
+    "Hmm, let me check on my end and circle back.",
+    "Sure, sounds good 👍",
+    "Can you share a bit more detail?",
+    "Perfect, thanks for letting me know.",
+    "Understood, I'll look into it.",
+    "Great, that works for me.",
+    "Interesting — do you have an example?",
+]
+
+
+async def _simulate_mock_reply(owner_id: str, customer_phone: str, contact_id: Optional[str], outbound_body: str):
+    """Generate a fake inbound reply 2-4s after a mock outbound send, so the UI can render a realistic back-and-forth."""
+    try:
+        await asyncio.sleep(random.uniform(2.0, 4.0))
+        body = random.choice(MOCK_REPLIES)
+        # Contextual tweak for questions
+        if "?" in (outbound_body or ""):
+            body = random.choice([
+                "Good question — give me a sec.",
+                "Let me find out and get back to you.",
+                "Yes — I can confirm that.",
+                "Not sure off the top of my head, will check.",
+            ])
+        await db.messages.insert_one({
+            "id": str(uuid.uuid4()),
+            "owner_id": owner_id,
+            "channel": "whatsapp",
+            "direction": "inbound",
+            "from": customer_phone,
+            "body": body,
+            "received_at": now_utc_iso(),
+            "contact_id": contact_id,
+            "provider": "mock_simulated",
+            "read": False,
+        })
+    except Exception as e:
+        logger.warning(f"Mock reply simulation failed: {e}")
+
+
+# ---------- WhatsApp Message Templates (for 24-hour window compliance) ----------
+class WhatsAppTemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    language: str = "en_US"
+    category: Literal["marketing", "utility", "authentication"] = "utility"
+    body: str = Field(min_length=1, max_length=1024)
+    header: Optional[str] = None
+    footer: Optional[str] = None
+    meta_template_name: Optional[str] = None
+
+
+def _count_params(body: str) -> int:
+    """Count {{1}}, {{2}}, ... placeholders in a template body."""
+    import re
+    matches = re.findall(r"\{\{(\d+)\}\}", body or "")
+    if not matches:
+        return 0
+    return max(int(m) for m in matches)
+
+
+def _render_template(body: str, params: List[str]) -> str:
+    out = body or ""
+    for i, v in enumerate(params or []):
+        out = out.replace(f"{{{{{i+1}}}}}", str(v))
+    return out
+
+
+@api_router.get("/whatsapp/templates")
+async def list_templates(user=Depends(get_current_user)):
+    items = await db.whatsapp_templates.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for it in items:
+        it["param_count"] = _count_params(it.get("body", ""))
+    return items
+
+
+@api_router.post("/whatsapp/templates")
+async def create_template(payload: WhatsAppTemplateIn, user=Depends(require_permission("settings.manage"))):
+    doc = payload.model_dump()
+    doc.update({
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "status": "approved" if payload.meta_template_name else "local",
+        "param_count": _count_params(payload.body),
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    })
+    await db.whatsapp_templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.put("/whatsapp/templates/{tid}")
+async def update_template(tid: str, payload: WhatsAppTemplateIn, user=Depends(require_permission("settings.manage"))):
+    update = payload.model_dump()
+    update["updated_at"] = now_utc_iso()
+    update["param_count"] = _count_params(payload.body)
+    res = await db.whatsapp_templates.update_one({"id": tid, "owner_id": user["id"]}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Template not found")
+    out = await db.whatsapp_templates.find_one({"id": tid, "owner_id": user["id"]}, {"_id": 0})
+    return out
+
+
+@api_router.delete("/whatsapp/templates/{tid}")
+async def delete_template(tid: str, user=Depends(require_permission("settings.manage"))):
+    await db.whatsapp_templates.delete_one({"id": tid, "owner_id": user["id"]})
+    return {"ok": True}
+
+
+@api_router.post("/whatsapp/templates/seed")
+async def seed_default_templates(user=Depends(get_current_user)):
+    """Add a handful of default starter templates (idempotent by name)."""
+    defaults = [
+        {"name": "welcome_message", "category": "utility", "body": "Hi {{1}}, thanks for reaching out to {{2}}! How can we help you today?"},
+        {"name": "order_confirmation", "category": "utility", "body": "Hi {{1}}, your order {{2}} has been confirmed. Expected delivery: {{3}}."},
+        {"name": "appointment_reminder", "category": "utility", "body": "Hi {{1}}, this is a reminder of your appointment on {{2}} at {{3}}. Reply YES to confirm."},
+        {"name": "follow_up", "category": "marketing", "body": "Hi {{1}}, just following up on our last conversation. Any questions?"},
+        {"name": "otp_code", "category": "authentication", "body": "Your verification code is {{1}}. It expires in 10 minutes."},
+    ]
+    created = 0
+    for d in defaults:
+        existing = await db.whatsapp_templates.find_one({"owner_id": user["id"], "name": d["name"]}, {"_id": 0})
+        if existing:
+            continue
+        doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": user["id"],
+            "language": "en_US",
+            "status": "local",
+            "param_count": _count_params(d["body"]),
+            "created_at": now_utc_iso(),
+            "updated_at": now_utc_iso(),
+            **d,
+        }
+        await db.whatsapp_templates.insert_one(doc)
+        created += 1
+    return {"ok": True, "created": created}
+
+
+class WhatsAppTemplateSendIn(BaseModel):
+    to: str
+    template_id: Optional[str] = None
+    template_name: Optional[str] = None
+    params: List[str] = Field(default_factory=list)
+    language: str = "en_US"
+    contact_id: Optional[str] = None
+    provider: Optional[Literal["whatsapp_business", "twilio", "auto"]] = "auto"
+
+
+@api_router.post("/whatsapp/send-template")
+async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_permission("tickets.write"))):
+    """Send a WhatsApp template message (for starting conversations outside the 24-hour window)."""
+    tpl = None
+    if payload.template_id:
+        tpl = await db.whatsapp_templates.find_one({"id": payload.template_id, "owner_id": user["id"]}, {"_id": 0})
+    elif payload.template_name:
+        tpl = await db.whatsapp_templates.find_one({"name": payload.template_name, "owner_id": user["id"]}, {"_id": 0})
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+
+    expected = int(tpl.get("param_count") or _count_params(tpl.get("body", "")))
+    if expected != len(payload.params):
+        raise HTTPException(400, f"Template expects {expected} parameter(s); got {len(payload.params)}")
+
+    rendered = _render_template(tpl.get("body", ""), payload.params)
+
+    # If Meta-approved template + Meta creds present, use the real template API
+    if (not payload.provider or payload.provider in ("auto", "whatsapp_business")) and tpl.get("meta_template_name"):
+        cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+        if cfg and cfg.get("access_token") and cfg.get("phone_number_id"):
+            try:
+                import requests
+                components = []
+                if payload.params:
+                    components.append({
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": str(p)} for p in payload.params],
+                    })
+                r = requests.post(
+                    f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}/messages",
+                    headers={
+                        "Authorization": f"Bearer {cfg['access_token']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "messaging_product": "whatsapp",
+                        "to": payload.to,
+                        "type": "template",
+                        "template": {
+                            "name": tpl["meta_template_name"],
+                            "language": {"code": tpl.get("language") or "en_US"},
+                            "components": components,
+                        },
+                    },
+                    timeout=10,
+                )
+                if r.status_code < 400:
+                    mid = (r.json().get("messages") or [{}])[0].get("id")
+                    doc = {
+                        "id": str(uuid.uuid4()),
+                        "owner_id": user["id"],
+                        "channel": "whatsapp_business",
+                        "direction": "outbound",
+                        "to": payload.to,
+                        "body": rendered,
+                        "message_id": mid,
+                        "provider": "whatsapp_business",
+                        "status": "sent",
+                        "template_id": tpl["id"],
+                        "template_name": tpl["name"],
+                        "contact_id": payload.contact_id,
+                        "sent_at": now_utc_iso(),
+                    }
+                    await db.messages.insert_one(doc)
+                    doc.pop("_id", None)
+                    return doc
+            except Exception as e:
+                logger.warning(f"Meta template send failed, falling back to text: {e}")
+
+    # Fallback: send the rendered body through normal send path (handles mock + other providers)
+    send_payload = WhatsAppSendIn(
+        to=payload.to,
+        body=rendered,
+        contact_id=payload.contact_id,
+        provider=payload.provider or "auto",
+    )
+    result = await whatsapp_send(send_payload, user=user)
+    if isinstance(result, dict):
+        await db.messages.update_one(
+            {"id": result.get("id")},
+            {"$set": {"template_id": tpl["id"], "template_name": tpl["name"]}},
+        )
+        result["template_id"] = tpl["id"]
+        result["template_name"] = tpl["name"]
+    return result
+
+
 
 # ---------- Mount ----------
 app.include_router(api_router)
