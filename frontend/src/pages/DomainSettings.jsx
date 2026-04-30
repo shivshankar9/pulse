@@ -7,19 +7,23 @@ import { Badge } from '../components/ui/badge';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { CheckCircle2, XCircle, AlertCircle, Copy, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertCircle, Copy, Trash2, RefreshCw, Plus, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function DomainSettings() {
   const [domains, setDomains] = useState([]);
+  const [frontendDomains, setFrontendDomains] = useState([]);
   const [loading, setLoading] = useState(true);
   const [newDomain, setNewDomain] = useState('');
+  const [newFrontendDomain, setNewFrontendDomain] = useState('');
+  const [businessName, setBusinessName] = useState('');
   const [provider, setProvider] = useState('resend');
   const [selectedDomain, setSelectedDomain] = useState(null);
   const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     loadDomains();
+    loadFrontendDomains();
   }, []);
 
   const loadDomains = async () => {
@@ -33,7 +37,59 @@ export default function DomainSettings() {
     }
   };
 
-  const addDomain = async () => {
+  const loadFrontendDomains = async () => {
+    try {
+      const res = await api.get('/frontend-domains');
+      setFrontendDomains(res.data);
+    } catch (error) {
+      toast.error('Failed to load frontend domains');
+    }
+  };
+
+  const addFrontendDomain = async () => {
+    if (!newFrontendDomain) {
+      toast.error('Please enter a domain name');
+      return;
+    }
+
+    try {
+      const res = await api.post('/frontend-domains', {
+        domain: newFrontendDomain,
+        business_name: businessName,
+      });
+      toast.success('Frontend domain added! Follow verification instructions.');
+      setFrontendDomains([res.data, ...frontendDomains]);
+      setNewFrontendDomain('');
+      setBusinessName('');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to add frontend domain');
+    }
+  };
+
+  const verifyFrontendDomain = async (domainId) => {
+    setVerifying(true);
+    try {
+      const res = await api.post(`/frontend-domains/${domainId}/verify`);
+      toast.success(res.data.verified ? 'Domain verified!' : res.data.message);
+      loadFrontendDomains();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Verification failed');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const deleteFrontendDomain = async (domainId) => {
+    if (!confirm('Are you sure you want to remove this frontend domain?')) return;
+
+    try {
+      await api.delete(`/frontend-domains/${domainId}`);
+      toast.success('Frontend domain removed');
+      setFrontendDomains(frontendDomains.filter(d => d.id !== domainId));
+    } catch (error) {
+      toast.error('Failed to remove frontend domain');
+    }
+  };
     if (!newDomain) {
       toast.error('Please enter a domain name');
       return;
@@ -102,15 +158,16 @@ export default function DomainSettings() {
   return (
     <div className="p-8 max-w-6xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Custom Domain & Email Settings</h1>
+        <h1 className="text-3xl font-bold mb-2">Domain Management</h1>
         <p className="text-gray-600">
-          Configure custom domains to send emails from your own domain (e.g., hello@yourbusiness.com)
+          Configure email domains for sending and frontend domains for CORS access. Perfect for multi-tenant deployments.
         </p>
       </div>
 
       <Tabs defaultValue="domains" className="space-y-6">
         <TabsList>
-          <TabsTrigger value="domains">Domains</TabsTrigger>
+          <TabsTrigger value="domains">Email Domains</TabsTrigger>
+          <TabsTrigger value="frontend">Frontend Domains</TabsTrigger>
           <TabsTrigger value="add">Add Domain</TabsTrigger>
           <TabsTrigger value="providers">Email Providers</TabsTrigger>
         </TabsList>
@@ -263,10 +320,177 @@ export default function DomainSettings() {
           )}
         </TabsContent>
 
+        <TabsContent value="frontend" className="space-y-4">
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold mb-2">Frontend Domains</h2>
+            <p className="text-gray-600">
+              Manage frontend domains for CORS access. Each business can register their own domain.
+            </p>
+          </div>
+
+          {frontendDomains.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center">
+                <Globe className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                <h3 className="text-lg font-semibold mb-2">No frontend domains configured</h3>
+                <p className="text-gray-600 mb-4">
+                  Add your frontend domain to enable CORS access for your application.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4">
+              {frontendDomains.map((domain) => (
+                <Card key={domain.id}>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          {domain.domain}
+                          {domain.verified ? (
+                            <Badge variant="success" className="bg-green-100 text-green-800">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Verified
+                            </Badge>
+                          ) : (
+                            <Badge variant="warning" className="bg-yellow-100 text-yellow-800">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              Pending
+                            </Badge>
+                          )}
+                        </CardTitle>
+                        <CardDescription>
+                          {domain.business_name && `Business: ${domain.business_name} • `}
+                          Added {new Date(domain.created_at).toLocaleDateString()}
+                        </CardDescription>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => verifyFrontendDomain(domain.id)}
+                          disabled={verifying}
+                        >
+                          <RefreshCw className={`w-4 h-4 mr-2 ${verifying ? 'animate-spin' : ''}`} />
+                          Verify
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => deleteFrontendDomain(domain.id)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+
+                  {!domain.verified && (
+                    <CardContent>
+                      <Alert className="mb-4">
+                        <AlertDescription>
+                          <strong>Verification Required:</strong> Create a file at your domain to verify ownership.
+                        </AlertDescription>
+                      </Alert>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-sm font-medium">1. Create this file on your domain:</label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <code className="text-sm bg-gray-100 px-2 py-1 rounded flex-1">
+                              https://{domain.domain}/.well-known/pulse-crm-verification.txt
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyToClipboard(`https://${domain.domain}/.well-known/pulse-crm-verification.txt`)}
+                            >
+                              <Copy className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-sm font-medium">2. File content (verification token):</label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <code className="text-sm bg-gray-100 px-2 py-1 rounded flex-1">
+                              {domain.verification_token}
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyToClipboard(domain.verification_token)}
+                            >
+                              <Copy className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="text-sm text-gray-600">
+                          <strong>Instructions:</strong>
+                          <ol className="list-decimal list-inside mt-1 space-y-1">
+                            <li>Create the `.well-known` directory in your domain's public folder</li>
+                            <li>Create `pulse-crm-verification.txt` with the token above</li>
+                            <li>Make sure the file is accessible via HTTPS</li>
+                            <li>Click "Verify" to complete the process</li>
+                          </ol>
+                        </div>
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Add Frontend Domain</CardTitle>
+              <CardDescription>
+                Register your frontend domain to enable CORS access
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Domain Name</label>
+                <Input
+                  placeholder="yourbusiness.vercel.app"
+                  value={newFrontendDomain}
+                  onChange={(e) => setNewFrontendDomain(e.target.value)}
+                />
+                <p className="text-sm text-gray-600 mt-1">
+                  Enter your frontend domain (e.g., yourbusiness.vercel.app, app.yourdomain.com)
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Business Name (Optional)</label>
+                <Input
+                  placeholder="Your Business Name"
+                  value={businessName}
+                  onChange={(e) => setBusinessName(e.target.value)}
+                />
+              </div>
+
+              <Alert>
+                <AlertDescription>
+                  <strong>Multi-tenant Support:</strong> Each business can register their own frontend domain. 
+                  Once verified, the domain will be automatically allowed for CORS requests.
+                </AlertDescription>
+              </Alert>
+
+              <Button onClick={addFrontendDomain} className="w-full">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Frontend Domain
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="add">
           <Card>
             <CardHeader>
-              <CardTitle>Add Custom Domain</CardTitle>
+              <CardTitle>Add Email Domain</CardTitle>
               <CardDescription>
                 Configure a custom domain to send emails from your business domain
               </CardDescription>
@@ -310,7 +534,7 @@ export default function DomainSettings() {
 
               <Button onClick={addDomain} className="w-full">
                 <Plus className="w-4 h-4 mr-2" />
-                Add Domain
+                Add Email Domain
               </Button>
             </CardContent>
           </Card>

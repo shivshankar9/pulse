@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.responses import Response
 import csv
 import io
 from dotenv import load_dotenv
@@ -2000,18 +2001,28 @@ async def whatsapp_business_list(user=Depends(get_current_user)):
     ).sort("sent_at", -1).to_list(500)
     return items
 
+@api_router.get("/webhooks/whatsapp-business/{owner_id}")
+async def webhook_whatsapp_business_verify(owner_id: str, request: Request):
+    """Webhook verification for WhatsApp Business API (Meta)"""
+    try:
+        verify_token = request.query_params.get("hub.verify_token")
+        challenge = request.query_params.get("hub.challenge")
+        
+        # Check if verify token matches
+        expected_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "pulse_crm_verify")
+        if verify_token == expected_token:
+            return int(challenge) if challenge else {"status": "verified"}
+        else:
+            raise HTTPException(status_code=403, detail="Invalid verify token")
+    except Exception as e:
+        logger.error(f"WhatsApp Business webhook verification error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 @api_router.post("/webhooks/whatsapp-business/{owner_id}")
 async def webhook_whatsapp_business(owner_id: str, request: Request):
     """Webhook for WhatsApp Business API (Meta)"""
     try:
         data = await request.json()
-        
-        # Verify webhook (first time setup)
-        if request.method == "GET":
-            verify_token = request.query_params.get("hub.verify_token")
-            challenge = request.query_params.get("hub.challenge")
-            if verify_token == os.environ.get("WHATSAPP_VERIFY_TOKEN", "pulse_crm_verify"):
-                return {"hub.challenge": challenge}
         
         # Process incoming message
         if data.get("object") == "whatsapp_business_account":
@@ -3103,16 +3114,191 @@ async def create_ticket_from_whatsapp(phone: str, payload: WhatsAppCreateTicketI
 # ---------- Mount ----------
 app.include_router(api_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ---------- Dynamic CORS Middleware ----------
+async def get_allowed_origins():
+    """Get allowed CORS origins from database and environment"""
+    try:
+        # Get from environment (for development and fallback)
+        env_origins = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+        
+        # Get custom frontend domains from database
+        db_origins = []
+        async for domain in db.frontend_domains.find({}, {"_id": 0, "domain": 1, "verified": 1}):
+            if domain.get("verified", False):
+                db_origins.append(f"https://{domain['domain']}")
+                db_origins.append(f"http://{domain['domain']}")  # For development
+        
+        # Combine and deduplicate
+        all_origins = list(set(env_origins + db_origins))
+        return all_origins
+    except Exception as e:
+        logging.warning(f"Failed to get dynamic CORS origins: {e}")
+        # Fallback to environment only
+        return os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+
+class DynamicCORSMiddleware:
+    def __init__(self, app):
+        self.app = app
+        self._cached_origins = []
+        self._cache_time = 0
+        self._cache_ttl = 300  # 5 minutes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Cache origins for 5 minutes to avoid DB hits on every request
+        current_time = datetime.now().timestamp()
+        if current_time - self._cache_time > self._cache_ttl:
+            self._cached_origins = await get_allowed_origins()
+            self._cache_time = current_time
+
+        request = Request(scope, receive)
+        origin = request.headers.get("origin")
+
+        # Check if origin is allowed
+        if origin and (origin in self._cached_origins or "*" in self._cached_origins):
+            # Handle preflight requests
+            if request.method == "OPTIONS":
+                response = Response()
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Access-Control-Allow-Methods"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+                await response(scope, receive, send)
+                return
+
+            # Handle actual requests
+            async def send_wrapper(message):
+                if message["type"] == "http.response.start":
+                    headers = dict(message.get("headers", []))
+                    headers[b"access-control-allow-origin"] = origin.encode()
+                    headers[b"access-control-allow-credentials"] = b"true"
+                    message["headers"] = list(headers.items())
+                await send(message)
+
+            await self.app(scope, receive, send_wrapper)
+        else:
+            await self.app(scope, receive, send)
+
+# Add the dynamic CORS middleware
+app.add_middleware(DynamicCORSMiddleware)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ---------- Frontend Domain Management ----------
+class FrontendDomainIn(BaseModel):
+    domain: str
+    business_name: Optional[str] = None
+
+@api_router.get("/frontend-domains")
+async def list_frontend_domains(user=Depends(require_permission("settings.manage"))):
+    """List frontend domains for this workspace"""
+    items = await db.frontend_domains.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return items
+
+@api_router.post("/frontend-domains")
+async def add_frontend_domain(payload: FrontendDomainIn, user=Depends(require_permission("settings.manage"))):
+    """Add a frontend domain (e.g., yourbusiness.vercel.app)"""
+    # Validate domain format
+    import re
+    domain_pattern = r'^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}\.)*[a-zA-Z]{2,}$'
+    if not re.match(domain_pattern, payload.domain):
+        raise HTTPException(400, "Invalid domain format")
+    
+    # Check if domain already exists
+    existing = await db.frontend_domains.find_one({"domain": payload.domain})
+    if existing:
+        raise HTTPException(400, "Domain already registered by another workspace")
+    
+    doc = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "domain": payload.domain,
+        "business_name": payload.business_name,
+        "verified": False,
+        "verification_token": str(uuid.uuid4())[:16],
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    
+    await db.frontend_domains.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+    if not re.match(domain_pattern, payload.domain):
+        raise HTTPException(400, "Invalid domain format")
+    
+    # Check if domain already exists
+    existing = await db.frontend_domains.find_one({"domain": payload.domain})
+    if existing:
+        raise HTTPException(400, "Domain already registered by another workspace")
+    
+    doc = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "domain": payload.domain,
+        "business_name": payload.business_name,
+        "verified": False,
+        "verification_token": str(uuid.uuid4())[:16],
+        "created_at": now_utc_iso(),
+        "updated_at": now_utc_iso(),
+    }
+    
+    await db.frontend_domains.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.post("/frontend-domains/{domain_id}/verify")
+async def verify_frontend_domain(domain_id: str, user=Depends(require_permission("settings.manage"))):
+    """Verify frontend domain ownership"""
+    domain_doc = await db.frontend_domains.find_one({"id": domain_id, "owner_id": user["id"]}, {"_id": 0})
+    if not domain_doc:
+        raise HTTPException(404, "Domain not found")
+    
+    domain = domain_doc["domain"]
+    verification_token = domain_doc["verification_token"]
+    
+    # Try to fetch verification file from the domain
+    import aiohttp
+    verification_url = f"https://{domain}/.well-known/pulse-crm-verification.txt"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(verification_url, timeout=10) as response:
+                if response.status == 200:
+                    content = await response.text()
+                    if verification_token in content.strip():
+                        # Domain verified!
+                        await db.frontend_domains.update_one(
+                            {"id": domain_id, "owner_id": user["id"]},
+                            {"$set": {"verified": True, "verified_at": now_utc_iso()}}
+                        )
+                        return {"verified": True, "message": "Domain verified successfully!"}
+                    else:
+                        return {"verified": False, "message": "Verification token not found in file"}
+                else:
+                    return {"verified": False, "message": f"Could not access verification file (HTTP {response.status})"}
+    except Exception as e:
+        return {"verified": False, "message": f"Verification failed: {str(e)}"}
+
+@api_router.delete("/frontend-domains/{domain_id}")
+async def delete_frontend_domain(domain_id: str, user=Depends(require_permission("settings.manage"))):
+    """Remove a frontend domain"""
+    result = await db.frontend_domains.delete_one({"id": domain_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Domain not found")
+    return {"ok": True}
+
+# Public endpoint for domain verification (no auth required)
+@api_router.get("/public/verify-domain/{domain}")
+async def public_verify_domain(domain: str):
+    """Public endpoint to get verification token for a domain"""
+    domain_doc = await db.frontend_domains.find_one({"domain": domain}, {"_id": 0, "verification_token": 1})
+    if not domain_doc:
+        raise HTTPException(404, "Domain not found")
+    return {"verification_token": domain_doc["verification_token"]}
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

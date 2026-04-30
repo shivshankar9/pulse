@@ -15,3 +15,7 @@ services:
         value: pulse_crm
       - key: JWT_SECRET
         generateValue: true
+      - key: CORS_ORIGINS
+        value: "https://puls1.vercel.app,http://localhost:3000,https://localhost:3000"
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: "pulse_crm_verify"
