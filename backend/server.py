@@ -1291,6 +1291,49 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
     doc.pop("_id", None)
     return doc
 
+@api_router.get("/debug/integrations/{provider}")
+async def debug_integration(provider: str, user=Depends(get_current_user)):
+    """Debug endpoint to check integration configuration"""
+    
+    # Get raw integration data
+    raw_integration = await db.integrations.find_one(
+        {"owner_id": user["id"], "provider": provider}, 
+        {"_id": 0}
+    )
+    
+    # Get decrypted data
+    decrypted_cfg = await get_decrypted_integration(user["id"], provider)
+    
+    # Check required fields
+    required_fields = PROVIDER_KEYS.get(provider, [])
+    
+    field_status = {}
+    if decrypted_cfg:
+        for field in required_fields:
+            value = decrypted_cfg.get(field, "")
+            field_status[field] = {
+                "present": bool(value),
+                "length": len(str(value)) if value else 0,
+                "masked": "•" * max(0, len(str(value)) - 4) + str(value)[-4:] if value else "MISSING"
+            }
+    
+    return {
+        "provider": provider,
+        "required_fields": required_fields,
+        "raw_integration_exists": bool(raw_integration),
+        "decrypted_config_exists": bool(decrypted_cfg),
+        "field_status": field_status,
+        "validation": {
+            "all_required_present": all(
+                decrypted_cfg.get(field) for field in required_fields
+            ) if decrypted_cfg else False,
+            "missing_fields": [
+                field for field in required_fields 
+                if not decrypted_cfg.get(field)
+            ] if decrypted_cfg else required_fields
+        }
+    }
+
 @api_router.get("/whatsapp/status")
 async def whatsapp_status(user=Depends(get_current_user)):
     """Get WhatsApp integration status and configuration"""
