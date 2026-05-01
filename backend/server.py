@@ -2276,6 +2276,9 @@ async def debug_messages(owner_id: str):
 async def webhook_whatsapp_business(owner_id: str, request: Request):
     """Webhook for WhatsApp Business API (Meta)"""
     try:
+        # Log that webhook was called
+        logging.info(f"🔔 WhatsApp webhook called for user: {owner_id}")
+        
         data = await request.json()
         logging.info(f"📥 WhatsApp webhook received: {json.dumps(data, indent=2)}")
         
@@ -2366,6 +2369,7 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
         else:
             logging.warning(f"⚠️ Unknown webhook object type: {data.get('object')}")
         
+        logging.info(f"✅ Webhook processing completed successfully")
         return {"ok": True}
         
     except Exception as e:
