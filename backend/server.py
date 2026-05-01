@@ -2372,33 +2372,9 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
         logging.error(f"❌ WhatsApp webhook processing failed: {str(e)}")
         logging.error(f"📋 Request data: {await request.body()}")
         return {"error": str(e)}
-                            "status": "open",
-                            "priority": "medium",
-                            "contact_id": contact["id"] if contact else None,
-                            "requester_name": contact["name"] if contact else from_number,
-                            "requester_email": contact.get("email") if contact else None,
-                            "comments": [],
-                            "created_at": now_utc_iso(),
-                            "updated_at": now_utc_iso(),
-                        }
-                        
-                        await db.tickets.insert_one(ticket_doc)
-                        logger.info(f"Created ticket: {ticket_doc['id']}")
-                    
-                    # Status updates
-                    for status in value.get("statuses", []):
-                        message_id = status.get("id")
-                        status_value = status.get("status")
-                        logger.info(f"Processing status update: message_id={message_id}, status={status_value}")
-                        await db.messages.update_one(
-                            {"message_id": message_id},
-                            {"$set": {"status": status_value, "updated_at": now_utc_iso()}}
-                        )
-        
-        return {"ok": True}
-    except Exception as e:
-        logger.error(f"WhatsApp Business webhook error: {str(e)}")
-        return {"ok": False, "error": str(e)}
+
+
+# ---------- Debug Endpoints ----------
 
 # ---------- WebRTC Calling (Browser-based, No Server) ----------
 class WebRTCCallIn(BaseModel):
