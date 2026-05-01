@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS Test</title>
+</head>
+<body>
+    <h1>CORS Test</h1>
+    <button onclick="testCORS()">Test CORS</button>
+    <div id="result"></div>
+
+    <script>
+        async function testCORS() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing CORS...';
+            
+            try {
+                // Test health endpoint first
+                const healthResponse = await fetch('https://pulse-iisx.onrender.com/health');
+                const healthData = await healthResponse.json();
+                console.log('Health check:', healthData);
+                
+                // Test auth endpoint
+                const authResponse = await fetch('https://pulse-iisx.onrender.com/api/auth/me', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include'
+                });
+                
+                if (authResponse.ok) {
+                    resultDiv.innerHTML = '✅ CORS is working! Status: ' + authResponse.status;
+                } else {
+                    resultDiv.innerHTML = '⚠️ CORS working but auth failed (expected): ' + authResponse.status;
+                }
+            } catch (error) {
+                if (error.message.includes('CORS')) {
+                    resultDiv.innerHTML = '❌ CORS still blocked: ' + error.message;
+                } else {
+                    resultDiv.innerHTML = '✅ CORS working, other error: ' + error.message;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

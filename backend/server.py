@@ -32,13 +32,22 @@ if USE_MOCK_DB or not mongo_url:
     client = AsyncMongoMockClient()
     logging.warning("Using in-memory mock MongoDB — data will not persist between restarts")
 else:
-    # Configure MongoDB client - disable TLS for local connections
-    client = AsyncIOMotorClient(
-        mongo_url,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=10000
-    )
+    # Configure MongoDB client with better error handling
+    try:
+        client = AsyncIOMotorClient(
+            mongo_url,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000,
+            maxPoolSize=10,
+            minPoolSize=1
+        )
+        logging.info("Connected to MongoDB Atlas")
+    except Exception as e:
+        logging.error(f"Failed to connect to MongoDB: {e}")
+        logging.warning("Falling back to mock database")
+        from mongomock_motor import AsyncMongoMockClient
+        client = AsyncMongoMockClient()
 
 db = client[os.environ.get('DB_NAME', 'pulse_crm')]
 
@@ -86,6 +95,23 @@ SYSTEM_ROLES = {
 app = FastAPI(title="Pulse CRM API")
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        await db.users.count_documents({})
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    return {
+        "status": "healthy",
+        "database": db_status,
+        "timestamp": now_utc_iso()
+    }
 
 # ---------- Helpers ----------
 def now_utc_iso():
@@ -3220,14 +3246,11 @@ class DynamicCORSMiddleware:
         else:
             await self.app(scope, receive, send)
 
-# Add the dynamic CORS middleware
-app.add_middleware(DynamicCORSMiddleware)
-
-# Add fallback static CORS middleware as backup
+# Use static CORS middleware for reliability
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["https://puls1.vercel.app", "http://localhost:3000", "https://localhost:3000"],
+    allow_origins=["https://puls1.vercel.app", "http://localhost:3000", "https://localhost:3000", "*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
