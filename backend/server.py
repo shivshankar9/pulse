@@ -25,29 +25,42 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ.get('MONGO_URL', '')
-USE_MOCK_DB = os.environ.get('USE_MOCK_DB', 'false').lower() == 'true'
+USE_MOCK_DB = os.environ.get('USE_MOCK_DB', '').lower() == 'true'
 
-if USE_MOCK_DB or not mongo_url:
+# Database configuration - strict validation
+if USE_MOCK_DB:
     from mongomock_motor import AsyncMongoMockClient
     client = AsyncMongoMockClient()
-    logging.warning("Using in-memory mock MongoDB — data will not persist between restarts")
+    logging.warning("🔶 Using in-memory mock MongoDB — data will NOT persist between restarts")
+elif not mongo_url:
+    logging.error("❌ No MONGO_URL provided and USE_MOCK_DB is not true")
+    raise ValueError("Database configuration required: either set MONGO_URL or USE_MOCK_DB=true")
 else:
-    # Configure MongoDB client with better error handling
+    # Configure MongoDB Atlas client with optimized settings for Render
     try:
+        logging.info("🔗 Configuring MongoDB Atlas connection...")
+        
+        # Single optimized configuration for MongoDB Atlas on Render
         client = AsyncIOMotorClient(
             mongo_url,
-            serverSelectionTimeoutMS=5000,
+            serverSelectionTimeoutMS=10000,  # Reduced timeout
             connectTimeoutMS=10000,
             socketTimeoutMS=10000,
-            maxPoolSize=10,
-            minPoolSize=1
+            maxPoolSize=10,  # Increased pool size
+            minPoolSize=2,
+            retryWrites=True,
+            # Let MongoDB Atlas handle SSL automatically
+            tls=True,
+            tlsAllowInvalidCertificates=False,
+            tlsAllowInvalidHostnames=False,
         )
-        logging.info("Connected to MongoDB Atlas")
+        
+        logging.info("✅ MongoDB Atlas client configured successfully")
+            
     except Exception as e:
-        logging.error(f"Failed to connect to MongoDB: {e}")
-        logging.warning("Falling back to mock database")
-        from mongomock_motor import AsyncMongoMockClient
-        client = AsyncMongoMockClient()
+        logging.error(f"❌ Failed to configure MongoDB Atlas: {e}")
+        logging.error("Cannot start without database. Set USE_MOCK_DB=true for development.")
+        raise e
 
 db = client[os.environ.get('DB_NAME', 'pulse_crm')]
 
@@ -93,25 +106,76 @@ SYSTEM_ROLES = {
 }
 
 app = FastAPI(title="Pulse CRM API")
+
+# Apply CORS middleware FIRST before any other middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["https://puls1.vercel.app", "http://localhost:3000", "https://localhost:3000", "*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with detailed database status"""
     try:
-        # Test database connection
-        await db.users.count_documents({})
-        db_status = "connected"
+        db_status = "unknown"
+        db_details = {}
+        
+        if USE_MOCK_DB:
+            db_status = "mock (in-memory)"
+            db_details = {
+                "type": "mock",
+                "persistent": False,
+                "warning": "Data will not persist between restarts"
+            }
+        else:
+            try:
+                # Test database connection with timeout
+                await asyncio.wait_for(client.admin.command('ping'), timeout=5.0)
+                
+                # Get collection counts
+                users_count = await db.users.count_documents({})
+                messages_count = await db.messages.count_documents({})
+                contacts_count = await db.contacts.count_documents({})
+                
+                db_status = "mongodb_atlas_connected"
+                db_details = {
+                    "type": "mongodb_atlas",
+                    "persistent": True,
+                    "collections": {
+                        "users": users_count,
+                        "messages": messages_count,
+                        "contacts": contacts_count
+                    }
+                }
+            except asyncio.TimeoutError:
+                db_status = "mongodb_timeout"
+                db_details = {"error": "Database connection timeout (5s)"}
+            except Exception as e:
+                db_status = f"mongodb_error"
+                db_details = {"error": str(e)[:200]}
+        
+        return {
+            "status": "healthy",
+            "database": db_status,
+            "database_details": db_details,
+            "whatsapp_mode": "mock_allowed" if USE_MOCK_DB else "production_only",
+            "use_mock_db": USE_MOCK_DB,
+            "mongo_url_configured": bool(mongo_url),
+            "timestamp": now_utc_iso()
+        }
     except Exception as e:
-        db_status = f"error: {str(e)}"
-    
-    return {
-        "status": "healthy",
-        "database": db_status,
-        "timestamp": now_utc_iso()
-    }
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": now_utc_iso()
+        }
 
 # ---------- Helpers ----------
 def now_utc_iso():
@@ -1174,29 +1238,41 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
             error = str(e)
             continue
 
-    # Fallback: save as queued/mock so the UI always works even without provider configured
+    # Handle failure based on mock DB setting
     if not sent:
-        doc = {
-            "id": str(uuid.uuid4()),
-            "owner_id": user["id"],
-            "channel": "whatsapp",
-            "direction": "outbound",
-            "to": payload.to,
-            "from": None,
-            "body": payload.body,
-            "message_id": None,
-            "provider": "mock",
-            "status": "queued",
-            "error": error or "No WhatsApp provider configured. Add credentials in Settings → Integrations.",
-            "contact_id": payload.contact_id,
-            "sent_at": now_utc_iso(),
-        }
-        await db.messages.insert_one(doc)
-        doc.pop("_id", None)
-        # Schedule a simulated inbound reply so the user can see the full loop in mock mode
-        asyncio.create_task(_simulate_mock_reply(user["id"], payload.to, payload.contact_id, payload.body))
-        return doc
+        if USE_MOCK_DB:
+            # Only use mock mode when explicitly using mock database
+            logging.info(f"🔶 WhatsApp fallback to mock mode (mock DB enabled). Error: {error}")
+            doc = {
+                "id": str(uuid.uuid4()),
+                "owner_id": user["id"],
+                "channel": "whatsapp",
+                "direction": "outbound",
+                "to": payload.to,
+                "from": None,
+                "body": payload.body,
+                "message_id": None,
+                "provider": "mock",
+                "status": "queued",
+                "error": error or "No WhatsApp provider configured. Add credentials in Settings → Integrations.",
+                "contact_id": payload.contact_id,
+                "sent_at": now_utc_iso(),
+            }
+            await db.messages.insert_one(doc)
+            doc.pop("_id", None)
+            # Schedule a simulated inbound reply only in mock DB mode
+            logging.info(f"📱 Scheduling mock reply simulation for {payload.to}")
+            asyncio.create_task(_simulate_mock_reply(user["id"], payload.to, payload.contact_id, payload.body))
+            return doc
+        else:
+            # In production mode, fail if no provider is configured
+            logging.error(f"❌ WhatsApp send failed - no provider configured in production mode")
+            raise HTTPException(
+                status_code=400, 
+                detail="WhatsApp provider not configured. Please configure WhatsApp Business API, Twilio, or another provider in Settings → Integrations."
+            )
 
+    logging.info(f"✅ WhatsApp message sent via {provider_used} to {payload.to}")
     doc = {
         "id": str(uuid.uuid4()),
         "owner_id": user["id"],
@@ -1215,8 +1291,57 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
     doc.pop("_id", None)
     return doc
 
+@api_router.get("/whatsapp/status")
+async def whatsapp_status(user=Depends(get_current_user)):
+    """Get WhatsApp integration status and configuration"""
+    
+    # Check configured providers
+    providers_status = {}
+    for provider in ["whatsapp_business", "twilio", "vonage", "messagebird"]:
+        cfg = await get_decrypted_integration(user["id"], provider)
+        providers_status[provider] = {
+            "configured": bool(cfg and any(cfg.values())),
+            "has_credentials": bool(cfg),
+            "required_fields": PROVIDER_KEYS.get(provider, [])
+        }
+    
+    # Count recent messages
+    recent_messages = await db.messages.find({
+        "owner_id": user["id"], 
+        "channel": {"$in": ["whatsapp", "whatsapp_business"]}
+    }).sort("sent_at", -1).to_list(10)
+    
+    mock_messages = [m for m in recent_messages if m.get("provider") in ["mock", "mock_simulated"]]
+    real_messages = [m for m in recent_messages if m.get("provider") not in ["mock", "mock_simulated"]]
+    
+    has_real_provider = any(p["configured"] for p in providers_status.values())
+    
+    return {
+        "mode": "real" if has_real_provider else ("mock" if USE_MOCK_DB else "none"),
+        "mock_enabled": USE_MOCK_DB,
+        "providers": providers_status,
+        "recent_activity": {
+            "total_messages": len(recent_messages),
+            "mock_messages": len(mock_messages),
+            "real_messages": len(real_messages),
+            "last_message_at": recent_messages[0].get("sent_at") if recent_messages else None
+        },
+        "configuration_status": {
+            "use_mock_db": USE_MOCK_DB,
+            "real_providers_configured": has_real_provider,
+            "behavior": "mock_replies" if USE_MOCK_DB and not has_real_provider else (
+                "real_whatsapp" if has_real_provider else "requires_provider"
+            )
+        },
+        "webhook_config": {
+            "verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", "pulse_crm_verify"),
+            "webhook_url": f"https://pulse-iisx.onrender.com/api/webhooks/whatsapp-business/{user['id']}"
+        }
+    }
+
 @api_router.get("/whatsapp/messages")
 async def whatsapp_list(user=Depends(get_current_user)):
+    """List all WhatsApp messages for the user"""
     items = await db.messages.find({"owner_id": user["id"], "channel": "whatsapp"}, {"_id": 0}).sort("sent_at", -1).to_list(500)
     return items
 
@@ -2629,7 +2754,10 @@ MOCK_REPLIES = [
 async def _simulate_mock_reply(owner_id: str, customer_phone: str, contact_id: Optional[str], outbound_body: str):
     """Generate a fake inbound reply 2-4s after a mock outbound send, so the UI can render a realistic back-and-forth."""
     try:
-        await asyncio.sleep(random.uniform(2.0, 4.0))
+        delay = random.uniform(2.0, 4.0)
+        logging.info(f"📱 Mock reply simulation: waiting {delay:.1f}s before replying to {customer_phone}")
+        await asyncio.sleep(delay)
+        
         body = random.choice(MOCK_REPLIES)
         # Contextual tweak for questions
         if "?" in (outbound_body or ""):
@@ -2639,7 +2767,8 @@ async def _simulate_mock_reply(owner_id: str, customer_phone: str, contact_id: O
                 "Yes — I can confirm that.",
                 "Not sure off the top of my head, will check.",
             ])
-        await db.messages.insert_one({
+        
+        reply_doc = {
             "id": str(uuid.uuid4()),
             "owner_id": owner_id,
             "channel": "whatsapp",
@@ -2650,9 +2779,13 @@ async def _simulate_mock_reply(owner_id: str, customer_phone: str, contact_id: O
             "contact_id": contact_id,
             "provider": "mock_simulated",
             "read": False,
-        })
+        }
+        
+        await db.messages.insert_one(reply_doc)
+        logging.info(f"✅ Mock reply inserted: '{body}' from {customer_phone}")
+        
     except Exception as e:
-        logger.warning(f"Mock reply simulation failed: {e}")
+        logging.warning(f"❌ Mock reply simulation failed: {e}")
 
 
 # ---------- WhatsApp Message Templates (for 24-hour window compliance) ----------
@@ -3246,17 +3379,30 @@ class DynamicCORSMiddleware:
         else:
             await self.app(scope, receive, send)
 
-# Use static CORS middleware for reliability
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["https://puls1.vercel.app", "http://localhost:3000", "https://localhost:3000", "*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def startup_event():
+    """Test database connection on startup"""
+    try:
+        if USE_MOCK_DB:
+            logging.info("✅ Using mock database (in-memory) - USE_MOCK_DB=true")
+        else:
+            # Test MongoDB connection
+            logging.info("🔄 Testing MongoDB Atlas connection...")
+            await client.admin.command('ping')
+            logging.info("✅ Successfully connected to MongoDB Atlas")
+            
+            # Test basic operations
+            user_count = await db.users.count_documents({})
+            logging.info(f"✅ Database operations working - found {user_count} users")
+    except Exception as e:
+        logging.error(f"❌ Database connection failed: {e}")
+        if not USE_MOCK_DB:
+            logging.error("💥 Application cannot start without database connection")
+            logging.error("💡 Set USE_MOCK_DB=true for development mode")
+            raise e
 
 # ---------- Frontend Domain Management ----------
 class FrontendDomainIn(BaseModel):
