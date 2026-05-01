@@ -1291,6 +1291,40 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
     doc.pop("_id", None)
     return doc
 
+@api_router.post("/debug/simulate-inbound/{owner_id}")
+async def simulate_inbound_message(owner_id: str, phone: str = "+918210066921", message: str = "Test inbound message"):
+    """Debug endpoint to simulate an inbound WhatsApp message"""
+    try:
+        # Create a simulated inbound message
+        message_doc = {
+            "id": str(uuid.uuid4()),
+            "owner_id": owner_id,
+            "channel": "whatsapp_business",
+            "direction": "inbound",
+            "from": phone,
+            "body": message,
+            "message_id": f"debug_{uuid.uuid4().hex[:8]}",
+            "received_at": now_utc_iso(),
+            "contact_id": None,
+            "provider": "debug_simulation",
+            "read": False
+        }
+        
+        await db.messages.insert_one(message_doc)
+        logging.info(f"✅ Simulated inbound message created: {message_doc['id']}")
+        
+        return {
+            "ok": True,
+            "message": "Simulated inbound message created",
+            "message_id": message_doc["id"],
+            "from": phone,
+            "body": message
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ Failed to simulate inbound message: {e}")
+        return {"error": str(e)}
+
 @api_router.get("/debug/integrations/{provider}")
 async def debug_integration(provider: str, user=Depends(get_current_user)):
     """Debug endpoint to check integration configuration"""
@@ -2243,23 +2277,33 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
     """Webhook for WhatsApp Business API (Meta)"""
     try:
         data = await request.json()
-        logger.info(f"WhatsApp webhook received: {json.dumps(data, indent=2)}")
+        logging.info(f"📥 WhatsApp webhook received: {json.dumps(data, indent=2)}")
         
         # Process incoming message
         if data.get("object") == "whatsapp_business_account":
+            logging.info(f"✅ Valid WhatsApp Business webhook object")
             for entry in data.get("entry", []):
-                logger.info(f"Processing entry: {entry}")
+                logging.info(f"📋 Processing entry: {entry}")
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
-                    logger.info(f"Processing change value: {value}")
+                    logging.info(f"🔄 Processing change value: {value}")
+                    
+                    # Check for messages
+                    messages = value.get("messages", [])
+                    logging.info(f"📱 Found {len(messages)} messages in webhook")
                     
                     # Incoming message
-                    for message in value.get("messages", []):
+                    for message in messages:
                         from_number = message.get("from")
-                        text = message.get("text", {}).get("body", "")
+                        text_obj = message.get("text", {})
+                        text = text_obj.get("body", "") if text_obj else ""
                         message_id = message.get("id")
                         
-                        logger.info(f"Processing inbound message: from={from_number}, text={text}, id={message_id}")
+                        logging.info(f"📨 Processing inbound message: from={from_number}, text='{text}', id={message_id}")
+                        
+                        if not from_number or not text:
+                            logging.warning(f"⚠️ Skipping message with missing data: from={from_number}, text='{text}'")
+                            continue
                         
                         # Find or create contact
                         contact = await db.contacts.find_one(
@@ -2278,11 +2322,12 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                             "message_id": message_id,
                             "received_at": now_utc_iso(),
                             "contact_id": contact["id"] if contact else None,
-                            "provider": "whatsapp_business"
+                            "provider": "whatsapp_business",
+                            "read": False
                         }
                         
                         await db.messages.insert_one(message_doc)
-                        logger.info(f"Stored inbound message: {message_doc['id']}")
+                        logging.info(f"✅ Stored inbound message: {message_doc['id']} - '{text}'")
                         
                         # Auto-create ticket
                         ticket_doc = {
@@ -2291,6 +2336,42 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                             "subject": f"WhatsApp: {text[:60]}",
                             "description": text,
                             "channel": "whatsapp",
+                            "status": "open",
+                            "priority": "medium",
+                            "contact_id": contact["id"] if contact else None,
+                            "requester_name": contact["name"] if contact else from_number,
+                            "requester_email": contact.get("email") if contact else None,
+                            "comments": [],
+                            "created_at": now_utc_iso(),
+                            "updated_at": now_utc_iso(),
+                        }
+                        
+                        await db.tickets.insert_one(ticket_doc)
+                        logging.info(f"🎫 Created ticket: {ticket_doc['id']}")
+                    
+                    # Check for status updates
+                    statuses = value.get("statuses", [])
+                    if statuses:
+                        logging.info(f"📊 Found {len(statuses)} status updates")
+                        for status in statuses:
+                            message_id = status.get("id")
+                            status_value = status.get("status")
+                            logging.info(f"📈 Status update: {message_id} -> {status_value}")
+                            
+                            # Update message status
+                            await db.messages.update_one(
+                                {"message_id": message_id, "owner_id": owner_id},
+                                {"$set": {"status": status_value, "updated_at": now_utc_iso()}}
+                            )
+        else:
+            logging.warning(f"⚠️ Unknown webhook object type: {data.get('object')}")
+        
+        return {"ok": True}
+        
+    except Exception as e:
+        logging.error(f"❌ WhatsApp webhook processing failed: {str(e)}")
+        logging.error(f"📋 Request data: {await request.body()}")
+        return {"error": str(e)}
                             "status": "open",
                             "priority": "medium",
                             "contact_id": contact["id"] if contact else None,
