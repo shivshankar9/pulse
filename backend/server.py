@@ -1418,9 +1418,13 @@ async def whatsapp_status(user=Depends(get_current_user)):
 
 @api_router.get("/whatsapp/messages")
 async def whatsapp_list(user=Depends(get_current_user)):
-    """List all WhatsApp messages for the user"""
-    items = await db.messages.find({"owner_id": user["id"], "channel": "whatsapp"}, {"_id": 0}).sort("sent_at", -1).to_list(500)
-    return items
+    """List all WhatsApp messages for the user (including WhatsApp Business inbound)."""
+    items = await db.messages.find(
+        {"owner_id": user["id"], "channel": {"$in": ["whatsapp", "whatsapp_business"]}},
+        {"_id": 0}
+    ).to_list(5000)
+    items.sort(key=lambda x: (x.get("sent_at") or x.get("received_at") or ""), reverse=True)
+    return items[:500]
 
 class VoiceCallIn(BaseModel):
     to: str

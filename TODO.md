@@ -1,0 +1,2 @@
+- [x] Update backend/server.py so WhatsApp message listing includes inbound WhatsApp Business messages for UI chat visibility
+- [x] Verify route logic consistency for chat retrieval
