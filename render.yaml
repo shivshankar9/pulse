@@ -10,7 +10,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
       - key: USE_MOCK_DB
-        value: "true"
+        value: "false"
       - key: DB_NAME
         value: pulse_crm
       - key: JWT_SECRET
@@ -19,3 +19,5 @@ services:
         value: "https://puls1.vercel.app,http://localhost:3000,https://localhost:3000"
       - key: WHATSAPP_VERIFY_TOKEN
         value: "pulse_crm_verify"
+      - key: MONGO_URL
+        value: "mongodb+srv://pulse_crm:shiv%4080929@cluster0.y4jksxq.mongodb.net/pulse_crm?retryWrites=true&w=majority&tls=true&tlsAllowInvalidCertificates=false"

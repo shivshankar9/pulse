@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.responses import Response, PlainTextResponse
 import csv
 import io
+import json
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -2020,23 +2021,51 @@ async def webhook_whatsapp_business_verify(owner_id: str, request: Request):
         logger.error(f"WhatsApp Business webhook verification error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
+@api_router.get("/debug/messages/{owner_id}")
+async def debug_messages(owner_id: str):
+    """Debug endpoint to check stored messages"""
+    try:
+        messages = await db.messages.find(
+            {"owner_id": owner_id}, 
+            {"_id": 0}
+        ).sort("received_at", -1).to_list(50)
+        
+        tickets = await db.tickets.find(
+            {"owner_id": owner_id}, 
+            {"_id": 0}
+        ).sort("created_at", -1).to_list(20)
+        
+        return {
+            "messages_count": len(messages),
+            "messages": messages,
+            "tickets_count": len(tickets), 
+            "tickets": tickets
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @api_router.post("/webhooks/whatsapp-business/{owner_id}")
 async def webhook_whatsapp_business(owner_id: str, request: Request):
     """Webhook for WhatsApp Business API (Meta)"""
     try:
         data = await request.json()
+        logger.info(f"WhatsApp webhook received: {json.dumps(data, indent=2)}")
         
         # Process incoming message
         if data.get("object") == "whatsapp_business_account":
             for entry in data.get("entry", []):
+                logger.info(f"Processing entry: {entry}")
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
+                    logger.info(f"Processing change value: {value}")
                     
                     # Incoming message
                     for message in value.get("messages", []):
                         from_number = message.get("from")
                         text = message.get("text", {}).get("body", "")
                         message_id = message.get("id")
+                        
+                        logger.info(f"Processing inbound message: from={from_number}, text={text}, id={message_id}")
                         
                         # Find or create contact
                         contact = await db.contacts.find_one(
@@ -2045,7 +2074,7 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                         )
                         
                         # Log message
-                        await db.messages.insert_one({
+                        message_doc = {
                             "id": str(uuid.uuid4()),
                             "owner_id": owner_id,
                             "channel": "whatsapp_business",
@@ -2056,10 +2085,13 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                             "received_at": now_utc_iso(),
                             "contact_id": contact["id"] if contact else None,
                             "provider": "whatsapp_business"
-                        })
+                        }
+                        
+                        await db.messages.insert_one(message_doc)
+                        logger.info(f"Stored inbound message: {message_doc['id']}")
                         
                         # Auto-create ticket
-                        await db.tickets.insert_one({
+                        ticket_doc = {
                             "id": str(uuid.uuid4()),
                             "owner_id": owner_id,
                             "subject": f"WhatsApp: {text[:60]}",
@@ -2073,12 +2105,16 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                             "comments": [],
                             "created_at": now_utc_iso(),
                             "updated_at": now_utc_iso(),
-                        })
+                        }
+                        
+                        await db.tickets.insert_one(ticket_doc)
+                        logger.info(f"Created ticket: {ticket_doc['id']}")
                     
                     # Status updates
                     for status in value.get("statuses", []):
                         message_id = status.get("id")
                         status_value = status.get("status")
+                        logger.info(f"Processing status update: message_id={message_id}, status={status_value}")
                         await db.messages.update_one(
                             {"message_id": message_id},
                             {"$set": {"status": status_value, "updated_at": now_utc_iso()}}
@@ -3186,6 +3222,15 @@ class DynamicCORSMiddleware:
 
 # Add the dynamic CORS middleware
 app.add_middleware(DynamicCORSMiddleware)
+
+# Add fallback static CORS middleware as backup
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["https://puls1.vercel.app", "http://localhost:3000", "https://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
