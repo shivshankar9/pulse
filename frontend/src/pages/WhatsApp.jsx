@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import {
     MessageCircle, Send, Search, Phone, RefreshCw, 
     Loader2, User, Clock, CheckCheck, AlertCircle,
-    Settings as SettingsIcon, X, Plus, Circle
+    Settings as SettingsIcon, X, Plus, Circle, BookTemplate,
+    Zap, Copy, Check, Info, UserPlus, Ticket, Users, UserCheck
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -58,6 +59,29 @@ const WhatsAppInbox = () => {
     const [newPhone, setNewPhone] = useState("");
     const [showNewConv, setShowNewConv] = useState(false);
 
+    // Templates and Canned Responses
+    const [templates, setTemplates] = useState([]);
+    const [cannedResponses, setCannedResponses] = useState([]);
+    const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+    const [showCannedPicker, setShowCannedPicker] = useState(false);
+    const [selectedTemplate, setSelectedTemplate] = useState(null);
+    const [templateParams, setTemplateParams] = useState([]);
+
+    // Team presence + assignment
+    const [team, setTeam] = useState([]);
+    const [showAssign, setShowAssign] = useState(false);
+    const [autoAssigning, setAutoAssigning] = useState(false);
+
+    // Sync contact modal
+    const [showSyncContact, setShowSyncContact] = useState(false);
+    const [contactForm, setContactForm] = useState({ name: "", email: "", company: "", notes: "" });
+    const [syncing, setSyncing] = useState(false);
+
+    // Create ticket modal
+    const [showCreateTicket, setShowCreateTicket] = useState(false);
+    const [ticketForm, setTicketForm] = useState({ subject: "", description: "", priority: "medium", include_last_messages: 5 });
+    const [creatingTicket, setCreatingTicket] = useState(false);
+
     const threadEndRef = useRef(null);
     const pollRef = useRef(null);
 
@@ -65,6 +89,33 @@ const WhatsAppInbox = () => {
         try {
             const { data } = await api.get("/integrations");
             setIntegrations(data || {});
+        } catch (e) {
+            // silent
+        }
+    };
+
+    const loadTemplates = async () => {
+        try {
+            const { data } = await api.get("/whatsapp/templates");
+            setTemplates(data || []);
+        } catch (e) {
+            // silent
+        }
+    };
+
+    const loadCannedResponses = async () => {
+        try {
+            const { data } = await api.get("/canned-responses");
+            setCannedResponses(data || []);
+        } catch (e) {
+            // silent
+        }
+    };
+
+    const loadTeam = async () => {
+        try {
+            const { data } = await api.get("/presence");
+            setTeam(data || []);
         } catch (e) {
             // silent
         }
@@ -96,6 +147,15 @@ const WhatsAppInbox = () => {
     useEffect(() => {
         loadIntegrations();
         loadConversations();
+        loadTemplates();
+        loadCannedResponses();
+        loadTeam();
+    }, []);
+
+    // Refresh team presence every 20s so online indicators stay fresh
+    useEffect(() => {
+        const iv = setInterval(loadTeam, 20000);
+        return () => clearInterval(iv);
     }, []);
 
     // Poll conversations + active thread
@@ -143,6 +203,19 @@ const WhatsAppInbox = () => {
         );
     }, [integrations]);
 
+    // 24-hour window: true if the most recent INBOUND message was within 24h
+    const in24hWindow = useMemo(() => {
+        const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+        if (!lastInbound) return false;
+        const ts = lastInbound.received_at || lastInbound.sent_at;
+        if (!ts) return false;
+        return (Date.now() - new Date(ts).getTime()) < 24 * 60 * 60 * 1000;
+    }, [messages]);
+
+    const hasAnyInbound = useMemo(() => messages.some((m) => m.direction === "inbound"), [messages]);
+
+    const onlineCount = useMemo(() => team.filter((t) => t.online).length, [team]);
+
     const send = async () => {
         if (!reply.trim() || !selectedPhone) return;
         setSending(true);
@@ -165,6 +238,177 @@ const WhatsAppInbox = () => {
             toast.error(e.response?.data?.detail || "Failed to send message");
         } finally {
             setSending(false);
+        }
+    };
+
+    // Template functions
+    const openTemplatePicker = () => {
+        loadTemplates();
+        setSelectedTemplate(null);
+        setTemplateParams([]);
+        setShowTemplatePicker(true);
+    };
+
+    const pickTemplate = (tpl) => {
+        setSelectedTemplate(tpl);
+        const n = tpl.param_count || 0;
+        setTemplateParams(Array(n).fill(""));
+    };
+
+    const sendTemplate = async () => {
+        if (!selectedTemplate || !selectedPhone) return;
+        const params = templateParams.map((p) => (p || "").trim());
+        if (params.some((p) => !p)) {
+            toast.error("Fill all template parameters");
+            return;
+        }
+        setSending(true);
+        try {
+            const { data } = await api.post("/whatsapp/send-template", {
+                to: selectedPhone,
+                template_id: selectedTemplate.id,
+                params,
+                language: selectedTemplate.language || "en_US",
+                provider: "auto",
+                contact_id: selectedConv?.contact_id || null,
+            });
+            setShowTemplatePicker(false);
+            setSelectedTemplate(null);
+            setTemplateParams([]);
+            setMessages((prev) => [...prev, data]);
+            loadConversations();
+            if (data.status === "queued") {
+                toast.warning("Template queued (test mode). Configure WhatsApp Business API for real delivery.");
+            } else {
+                toast.success(`Template "${selectedTemplate.name}" sent`);
+            }
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Template send failed");
+        } finally {
+            setSending(false);
+        }
+    };
+
+    // Canned response functions
+    const openCannedPicker = () => {
+        loadCannedResponses();
+        setShowCannedPicker(true);
+    };
+
+    const insertCannedResponse = (cannedResponse) => {
+        setReply(cannedResponse.body);
+        setShowCannedPicker(false);
+        toast.success("Canned response inserted");
+    };
+
+    // Assignment functions
+    const assignTo = async (uid) => {
+        if (!selectedPhone) return;
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/assign`,
+                { user_id: uid }
+            );
+            toast.success(uid ? `Assigned to ${data.assigned_to_name || "agent"}` : "Unassigned");
+            setShowAssign(false);
+            loadConversations();
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Assign failed");
+        }
+    };
+
+    const autoAssign = async () => {
+        if (!selectedPhone) return;
+        setAutoAssigning(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/auto-assign`
+            );
+            toast.success(`Auto-assigned to ${data.assigned_to_name} (${data.candidates_online} online)`);
+            setShowAssign(false);
+            loadConversations();
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Auto-assign failed — is anyone online?");
+        } finally {
+            setAutoAssigning(false);
+        }
+    };
+
+    // Sync contact functions
+    const openSyncContact = () => {
+        setContactForm({
+            name: selectedConv?.contact_name || "",
+            email: selectedConv?.contact_email || "",
+            company: "",
+            notes: "",
+        });
+        setShowSyncContact(true);
+    };
+
+    const syncContact = async () => {
+        if (!selectedPhone) return;
+        setSyncing(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/sync-contact`,
+                {
+                    name: contactForm.name || null,
+                    email: contactForm.email || null,
+                    company: contactForm.company || null,
+                    notes: contactForm.notes || null,
+                }
+            );
+            toast.success(data.created ? `Lead created: ${data.contact?.name}` : `Contact updated: ${data.contact?.name}`);
+            setShowSyncContact(false);
+            loadConversations();
+            // Refresh thread to pick up contact linkage
+            loadThread(selectedPhone);
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Sync failed");
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    // Create ticket functions
+    const openCreateTicket = () => {
+        // Default subject from last inbound
+        const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+        const defaultSubject = lastInbound
+            ? `WhatsApp: ${(lastInbound.body || "").slice(0, 60)}`
+            : `WhatsApp conversation with ${selectedConv?.contact_name || selectedPhone}`;
+        setTicketForm({
+            subject: defaultSubject,
+            description: "",
+            priority: "medium",
+            include_last_messages: 5,
+        });
+        setShowCreateTicket(true);
+    };
+
+    const createTicketFromChat = async () => {
+        if (!selectedPhone) return;
+        if (!ticketForm.subject.trim()) {
+            toast.error("Subject is required");
+            return;
+        }
+        setCreatingTicket(true);
+        try {
+            const { data } = await api.post(
+                `/whatsapp/conversations/${encodeURIComponent(selectedPhone)}/create-ticket`,
+                {
+                    subject: ticketForm.subject.trim(),
+                    description: ticketForm.description || null,
+                    priority: ticketForm.priority,
+                    include_last_messages: Number(ticketForm.include_last_messages) || 5,
+                }
+            );
+            toast.success(`Ticket created: ${data.ticket?.subject}`);
+            setShowCreateTicket(false);
+        } catch (e) {
+            toast.error(e.response?.data?.detail || "Create ticket failed");
+        } finally {
+            setCreatingTicket(false);
         }
     };
 
@@ -356,8 +600,14 @@ const WhatsAppInbox = () => {
                                         {initials(selectedConv?.contact_name, selectedPhone)}
                                     </div>
                                     <div>
-                                        <div className="font-semibold text-gray-900">
+                                        <div className="font-semibold text-gray-900 flex items-center gap-2">
                                             {selectedConv?.contact_name || selectedPhone}
+                                            {selectedConv?.assigned_to_name && (
+                                                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full flex items-center gap-1">
+                                                    <UserCheck className="w-3 h-3" />
+                                                    {selectedConv.assigned_to_name}
+                                                </span>
+                                            )}
                                         </div>
                                         <div className="text-sm text-gray-500 flex items-center gap-2">
                                             <Phone className="w-3 h-3" />
@@ -371,12 +621,89 @@ const WhatsAppInbox = () => {
                                                     View Contact
                                                 </Link>
                                             )}
+                                            <span className="flex items-center gap-1">
+                                                <Circle className={`w-2 h-2 ${onlineCount > 0 ? "fill-green-500 text-green-500" : "fill-gray-400 text-gray-400"}`} />
+                                                {onlineCount} agent{onlineCount === 1 ? "" : "s"} online
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
+                                
+                                {/* Action Buttons */}
                                 <div className="flex items-center gap-2">
-                                    <Circle className="w-2 h-2 fill-green-500 text-green-500" />
-                                    <span className="text-sm text-gray-600">Online</span>
+                                    <button
+                                        onClick={openSyncContact}
+                                        className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
+                                        title={selectedConv?.contact_id ? "Update contact" : "Sync as lead"}
+                                    >
+                                        <UserPlus className="w-4 h-4" />
+                                        {selectedConv?.contact_id ? "Contact" : "Sync Lead"}
+                                    </button>
+                                    <button
+                                        onClick={openCreateTicket}
+                                        className="bg-purple-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2"
+                                        title="Create a support ticket from this conversation"
+                                    >
+                                        <Ticket className="w-4 h-4" />
+                                        Ticket
+                                    </button>
+                                    <div className="relative">
+                                        <button
+                                            onClick={() => { loadTeam(); setShowAssign(!showAssign); }}
+                                            className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
+                                                selectedConv?.assigned_to_name 
+                                                    ? "bg-green-600 text-white hover:bg-green-700" 
+                                                    : "bg-gray-600 text-white hover:bg-gray-700"
+                                            }`}
+                                        >
+                                            <Users className="w-4 h-4" />
+                                            {selectedConv?.assigned_to_name ? "Reassign" : "Assign"}
+                                        </button>
+                                        {showAssign && (
+                                            <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg w-72 z-40">
+                                                <button
+                                                    onClick={autoAssign}
+                                                    disabled={autoAssigning || onlineCount === 0}
+                                                    className="w-full text-left px-4 py-3 border-b border-gray-200 bg-blue-50 hover:bg-blue-100 text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                                                >
+                                                    {autoAssigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                                                    Auto-assign · online only ({onlineCount})
+                                                </button>
+                                                <div className="max-h-64 overflow-y-auto">
+                                                    {team.length === 0 ? (
+                                                        <div className="p-4 text-sm text-gray-500 text-center">No team members</div>
+                                                    ) : (
+                                                        team.map((t) => (
+                                                            <button
+                                                                key={t.id}
+                                                                onClick={() => assignTo(t.id)}
+                                                                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100"
+                                                            >
+                                                                <Circle className={`w-3 h-3 ${t.online ? "fill-green-500 text-green-500" : "fill-gray-400 text-gray-400"}`} />
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-sm font-medium truncate">{t.name || t.email}</div>
+                                                                    <div className="text-xs text-gray-500">
+                                                                        {t.role} · {t.online ? "online" : "offline"}
+                                                                    </div>
+                                                                </div>
+                                                                {selectedConv?.assigned_to === t.id && (
+                                                                    <Check className="w-4 h-4 text-green-600" />
+                                                                )}
+                                                            </button>
+                                                        ))
+                                                    )}
+                                                </div>
+                                                {selectedConv?.assigned_to_name && (
+                                                    <button
+                                                        onClick={() => assignTo(null)}
+                                                        className="w-full px-4 py-3 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium border-t border-gray-200"
+                                                    >
+                                                        Unassign
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -436,27 +763,64 @@ const WhatsAppInbox = () => {
 
                         {/* Message Input */}
                         <div className="bg-white border-t border-gray-200 p-4">
-                            <div className="max-w-4xl mx-auto flex gap-3">
-                                <textarea
-                                    value={reply}
-                                    onChange={(e) => setReply(e.target.value)}
-                                    onKeyDown={handleKey}
-                                    rows={1}
-                                    placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-                                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none max-h-32"
-                                />
-                                <button
-                                    onClick={send}
-                                    disabled={sending || !reply.trim()}
-                                    className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                >
-                                    {sending ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
+                            {/* 24-hour window indicator */}
+                            {hasAnyInbound && (
+                                <div className={`max-w-4xl mx-auto mb-3 px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+                                    in24hWindow
+                                        ? "bg-green-50 border border-green-200 text-green-800"
+                                        : "bg-yellow-50 border border-yellow-200 text-yellow-800"
+                                }`}>
+                                    <Info className="w-4 h-4 flex-shrink-0" />
+                                    {in24hWindow ? (
+                                        <span>Within 24-hour window - free-form replies allowed</span>
                                     ) : (
-                                        <Send className="w-4 h-4" />
+                                        <span>Outside 24-hour window - use approved templates to message</span>
                                     )}
-                                    Send
-                                </button>
+                                </div>
+                            )}
+                            
+                            <div className="max-w-4xl mx-auto">
+                                {/* Quick Actions */}
+                                <div className="flex gap-2 mb-3">
+                                    <button
+                                        onClick={openTemplatePicker}
+                                        className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
+                                    >
+                                        <BookTemplate className="w-4 h-4" />
+                                        Template
+                                    </button>
+                                    <button
+                                        onClick={openCannedPicker}
+                                        className="bg-purple-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2"
+                                    >
+                                        <Zap className="w-4 h-4" />
+                                        Quick Reply
+                                    </button>
+                                </div>
+                                
+                                {/* Message Input */}
+                                <div className="flex gap-3">
+                                    <textarea
+                                        value={reply}
+                                        onChange={(e) => setReply(e.target.value)}
+                                        onKeyDown={handleKey}
+                                        rows={1}
+                                        placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
+                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none max-h-32"
+                                    />
+                                    <button
+                                        onClick={send}
+                                        disabled={sending || !reply.trim()}
+                                        className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {sending ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Send className="w-4 h-4" />
+                                        )}
+                                        Send
+                                    </button>
+                                </div>
                             </div>
                             {!anyConfigured && (
                                 <div className="max-w-4xl mx-auto mt-2 text-xs text-gray-500 text-center">
@@ -511,6 +875,365 @@ const WhatsAppInbox = () => {
                                 className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700"
                             >
                                 Start Chat
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Template Picker Modal */}
+            {showTemplatePicker && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Send Template Message</h3>
+                            <button 
+                                onClick={() => setShowTemplatePicker(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        {!selectedTemplate ? (
+                            <div>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    Select an approved template to send. Templates are required for messaging outside the 24-hour window.
+                                </p>
+                                
+                                {templates.length === 0 ? (
+                                    <div className="text-center py-8">
+                                        <BookTemplate className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                                        <p className="text-gray-500 mb-4">No templates available</p>
+                                        <Link 
+                                            to="/app/settings"
+                                            className="text-blue-600 hover:underline"
+                                        >
+                                            Create templates in Settings →
+                                        </Link>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                                        {templates.map((template) => (
+                                            <button
+                                                key={template.id}
+                                                onClick={() => pickTemplate(template)}
+                                                className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="flex-1">
+                                                        <div className="font-medium text-gray-900 mb-1">
+                                                            {template.name}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600 mb-2">
+                                                            {template.body}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 text-xs text-gray-500">
+                                                            <span className="bg-gray-100 px-2 py-1 rounded">
+                                                                {template.category}
+                                                            </span>
+                                                            {template.param_count > 0 && (
+                                                                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                                                    {template.param_count} parameters
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="mb-4">
+                                    <h4 className="font-medium text-gray-900 mb-2">{selectedTemplate.name}</h4>
+                                    <p className="text-sm text-gray-600 mb-3">{selectedTemplate.body}</p>
+                                </div>
+                                
+                                {selectedTemplate.param_count > 0 && (
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Template Parameters
+                                        </label>
+                                        <div className="space-y-2">
+                                            {templateParams.map((param, index) => (
+                                                <input
+                                                    key={index}
+                                                    value={param}
+                                                    onChange={(e) => {
+                                                        const newParams = [...templateParams];
+                                                        newParams[index] = e.target.value;
+                                                        setTemplateParams(newParams);
+                                                    }}
+                                                    placeholder={`Parameter ${index + 1}`}
+                                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div className="flex gap-3 justify-end">
+                                    <button 
+                                        onClick={() => setSelectedTemplate(null)}
+                                        className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                    >
+                                        Back
+                                    </button>
+                                    <button
+                                        onClick={sendTemplate}
+                                        disabled={sending || (selectedTemplate.param_count > 0 && templateParams.some(p => !p.trim()))}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {sending ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Send className="w-4 h-4" />
+                                        )}
+                                        Send Template
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Canned Response Picker Modal */}
+            {showCannedPicker && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Quick Replies</h3>
+                            <button 
+                                onClick={() => setShowCannedPicker(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <p className="text-sm text-gray-600 mb-4">
+                            Select a pre-written response to insert into your message.
+                        </p>
+                        
+                        {cannedResponses.length === 0 ? (
+                            <div className="text-center py-8">
+                                <Zap className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                                <p className="text-gray-500 mb-4">No quick replies available</p>
+                                <Link 
+                                    to="/app/settings"
+                                    className="text-purple-600 hover:underline"
+                                >
+                                    Create quick replies in Settings →
+                                </Link>
+                            </div>
+                        ) : (
+                            <div className="space-y-2 max-h-96 overflow-y-auto">
+                                {cannedResponses.map((canned) => (
+                                    <button
+                                        key={canned.id}
+                                        onClick={() => insertCannedResponse(canned)}
+                                        className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                                    >
+                                        <div className="font-medium text-gray-900 mb-1">
+                                            {canned.name}
+                                        </div>
+                                        <div className="text-sm text-gray-600">
+                                            {canned.body}
+                                        </div>
+                                        {canned.shortcut && (
+                                            <div className="text-xs text-gray-500 mt-1">
+                                                Shortcut: {canned.shortcut}
+                                            </div>
+                                        )}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Sync Contact Modal */}
+            {showSyncContact && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-lg">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 className="text-lg font-semibold text-gray-900">
+                                    {selectedConv?.contact_id ? "Update Contact" : "Sync as Lead"}
+                                </h3>
+                                <p className="text-sm text-gray-600 mt-1">
+                                    Phone {selectedPhone} will be tagged as WhatsApp lead
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => setShowSyncContact(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                                <input
+                                    autoFocus
+                                    value={contactForm.name}
+                                    onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                                    placeholder="Alex Parker"
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                                    <input
+                                        type="email"
+                                        value={contactForm.email}
+                                        onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                                        placeholder="alex@company.com"
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
+                                    <input
+                                        value={contactForm.company}
+                                        onChange={(e) => setContactForm({ ...contactForm, company: e.target.value })}
+                                        placeholder="Acme Corp"
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                                <textarea
+                                    value={contactForm.notes}
+                                    onChange={(e) => setContactForm({ ...contactForm, notes: e.target.value })}
+                                    placeholder="Additional notes about this contact..."
+                                    rows={3}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-3 justify-end mt-6">
+                            <button 
+                                onClick={() => setShowSyncContact(false)}
+                                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={syncContact}
+                                disabled={syncing}
+                                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                {syncing ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <UserPlus className="w-4 h-4" />
+                                )}
+                                {selectedConv?.contact_id ? "Update" : "Sync Lead"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Create Ticket Modal */}
+            {showCreateTicket && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-lg">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 className="text-lg font-semibold text-gray-900">Create Support Ticket</h3>
+                                <p className="text-sm text-gray-600 mt-1">
+                                    Create a ticket from this WhatsApp conversation
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => setShowCreateTicket(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Subject *</label>
+                                <input
+                                    autoFocus
+                                    value={ticketForm.subject}
+                                    onChange={(e) => setTicketForm({ ...ticketForm, subject: e.target.value })}
+                                    placeholder="Brief description of the issue"
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                                <textarea
+                                    value={ticketForm.description}
+                                    onChange={(e) => setTicketForm({ ...ticketForm, description: e.target.value })}
+                                    placeholder="Additional details about the issue..."
+                                    rows={3}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                                    <select
+                                        value={ticketForm.priority}
+                                        onChange={(e) => setTicketForm({ ...ticketForm, priority: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                    >
+                                        <option value="low">Low</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="high">High</option>
+                                        <option value="urgent">Urgent</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Include Messages</label>
+                                    <select
+                                        value={ticketForm.include_last_messages}
+                                        onChange={(e) => setTicketForm({ ...ticketForm, include_last_messages: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                    >
+                                        <option value="0">None</option>
+                                        <option value="3">Last 3</option>
+                                        <option value="5">Last 5</option>
+                                        <option value="10">Last 10</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="flex gap-3 justify-end mt-6">
+                            <button 
+                                onClick={() => setShowCreateTicket(false)}
+                                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={createTicketFromChat}
+                                disabled={creatingTicket || !ticketForm.subject.trim()}
+                                className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                                {creatingTicket ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Ticket className="w-4 h-4" />
+                                )}
+                                Create Ticket
                             </button>
                         </div>
                     </div>

@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { 
     Plus, Search, Filter, Clock, User, MessageSquare, 
     CheckCircle, AlertCircle, Circle, Send, Loader2,
-    ArrowUp, ArrowDown, Minus, X, Edit3, Eye
+    ArrowUp, ArrowDown, Minus, X, Edit3, Eye, Zap
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -40,6 +40,7 @@ const Tickets = () => {
     const [tickets, setTickets] = useState([]);
     const [contacts, setContacts] = useState([]);
     const [users, setUsers] = useState([]);
+    const [cannedResponses, setCannedResponses] = useState([]);
     const [selectedTicket, setSelectedTicket] = useState(null);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -60,19 +61,22 @@ const Tickets = () => {
         contact_id: ""
     });
     const [comment, setComment] = useState("");
+    const [showCannedPicker, setShowCannedPicker] = useState(false);
 
     // Load data
     const loadData = useCallback(async () => {
         try {
-            const [ticketsRes, contactsRes, usersRes] = await Promise.all([
+            const [ticketsRes, contactsRes, usersRes, cannedRes] = await Promise.all([
                 api.get("/tickets"),
                 api.get("/contacts"),
-                api.get("/users").catch(() => ({ data: [] }))
+                api.get("/users").catch(() => ({ data: [] })),
+                api.get("/canned-responses").catch(() => ({ data: [] }))
             ]);
             
             setTickets(ticketsRes.data || []);
             setContacts(contactsRes.data || []);
             setUsers(usersRes.data || []);
+            setCannedResponses(cannedRes.data || []);
             
             // Update selected ticket if it exists
             if (selectedTicket) {
@@ -181,6 +185,13 @@ const Tickets = () => {
     const getContactName = (contactId) => {
         const contact = contacts.find(c => c.id === contactId);
         return contact ? contact.name : null;
+    };
+
+    // Canned response functions
+    const insertCannedResponse = (cannedResponse) => {
+        setComment(cannedResponse.body);
+        setShowCannedPicker(false);
+        toast.success("Quick reply inserted");
     };
 
     if (loading) {
@@ -431,6 +442,15 @@ const Tickets = () => {
 
                                 {/* Add Comment */}
                                 <div className="border-t border-gray-200 pt-4">
+                                    <div className="flex gap-2 mb-2">
+                                        <button
+                                            onClick={() => setShowCannedPicker(true)}
+                                            className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2"
+                                        >
+                                            <Zap className="w-4 h-4" />
+                                            Quick Reply
+                                        </button>
+                                    </div>
                                     <textarea
                                         value={comment}
                                         onChange={(e) => setComment(e.target.value)}
@@ -563,6 +583,62 @@ const Tickets = () => {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Canned Response Picker Modal */}
+            {showCannedPicker && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Quick Replies</h3>
+                            <button 
+                                onClick={() => setShowCannedPicker(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        
+                        <p className="text-sm text-gray-600 mb-4">
+                            Select a pre-written response to insert into your comment.
+                        </p>
+                        
+                        {cannedResponses.length === 0 ? (
+                            <div className="text-center py-8">
+                                <Zap className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                                <p className="text-gray-500 mb-4">No quick replies available</p>
+                                <a 
+                                    href="/app/settings"
+                                    className="text-purple-600 hover:underline"
+                                >
+                                    Create quick replies in Settings →
+                                </a>
+                            </div>
+                        ) : (
+                            <div className="space-y-2 max-h-96 overflow-y-auto">
+                                {cannedResponses.map((canned) => (
+                                    <button
+                                        key={canned.id}
+                                        onClick={() => insertCannedResponse(canned)}
+                                        className="w-full text-left p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                                    >
+                                        <div className="font-medium text-gray-900 mb-1">
+                                            {canned.name}
+                                        </div>
+                                        <div className="text-sm text-gray-600">
+                                            {canned.body}
+                                        </div>
+                                        {canned.shortcut && (
+                                            <div className="text-xs text-gray-500 mt-1">
+                                                Shortcut: {canned.shortcut}
+                                            </div>
+                                        )}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
