@@ -1,283 +1,571 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import api from "../lib/api";
-import { Plus, Trash2, MessageSquarePlus, Send, AlertTriangle, Lock, Globe, Sparkles } from "lucide-react";
+import { 
+    Plus, Search, Filter, Clock, User, MessageSquare, 
+    CheckCircle, AlertCircle, Circle, Send, Loader2,
+    ArrowUp, ArrowDown, Minus, X, Edit3, Eye
+} from "lucide-react";
 import { toast } from "sonner";
 
-const STATUS = ["open", "pending", "resolved", "closed"];
-const PRIORITY = ["low", "medium", "high", "urgent"];
-
-const priorityColor = (p) => ({ low: "text-inkSecondary", medium: "text-ink", high: "text-warn", urgent: "text-bad" }[p] || "text-ink");
-const statusColor = (s) => ({ open: "bg-bad text-white", pending: "bg-warn text-ink", resolved: "bg-ok text-white", closed: "bg-ink text-white" }[s] || "bg-bg");
-
-const slaState = (t) => {
-    if (!t || t.status === "resolved" || t.status === "closed") return null;
-    const now = new Date();
-    const fr = t.first_response_due_at ? new Date(t.first_response_due_at) : null;
-    const res = t.resolution_due_at ? new Date(t.resolution_due_at) : null;
-    if (!t.first_responded_at && fr) {
-        if (now > fr) return { kind: "breach-fr", label: "FR breached" };
-        const mins = Math.round((fr - now) / 60000);
-        return { kind: "fr", label: `FR ${mins}m` };
-    }
-    if (res) {
-        if (now > res) return { kind: "breach-res", label: "RES breached" };
-        const mins = Math.round((res - now) / 60000);
-        return { kind: "res", label: `RES ${mins}m` };
-    }
-    return null;
+const STATUS_CONFIG = {
+    open: { label: "Open", color: "bg-red-100 text-red-800", icon: Circle },
+    pending: { label: "Pending", color: "bg-yellow-100 text-yellow-800", icon: Clock },
+    resolved: { label: "Resolved", color: "bg-green-100 text-green-800", icon: CheckCircle },
+    closed: { label: "Closed", color: "bg-gray-100 text-gray-800", icon: CheckCircle }
 };
 
-const empty = { subject: "", description: "", contact_id: "", status: "open", priority: "medium", channel: "internal", custom: {} };
+const PRIORITY_CONFIG = {
+    low: { label: "Low", color: "text-gray-500", icon: ArrowDown },
+    medium: { label: "Medium", color: "text-blue-500", icon: Minus },
+    high: { label: "High", color: "text-orange-500", icon: ArrowUp },
+    urgent: { label: "Urgent", color: "text-red-500", icon: AlertCircle }
+};
+
+const formatTime = (dateString) => {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+};
 
 const Tickets = () => {
     const [tickets, setTickets] = useState([]);
     const [contacts, setContacts] = useState([]);
     const [users, setUsers] = useState([]);
-    const [groups, setGroups] = useState([]);
-    const [fields, setFields] = useState([]);
-    const [canned, setCanned] = useState([]);
-    const [open, setOpen] = useState(false);
-    const [form, setForm] = useState(empty);
-    const [selected, setSelected] = useState(null);
+    const [selectedTicket, setSelectedTicket] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [creating, setCreating] = useState(false);
+    const [commenting, setCommenting] = useState(false);
+    
+    // Filters and search
+    const [search, setSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState("all");
+    const [priorityFilter, setPriorityFilter] = useState("all");
+    const [assigneeFilter, setAssigneeFilter] = useState("all");
+    
+    // Forms
+    const [showCreateForm, setShowCreateForm] = useState(false);
+    const [newTicket, setNewTicket] = useState({
+        subject: "",
+        description: "",
+        priority: "medium",
+        contact_id: ""
+    });
     const [comment, setComment] = useState("");
-    const [internal, setInternal] = useState(false);
-    const [showCanned, setShowCanned] = useState(false);
-    const [aiBusy, setAiBusy] = useState(false);
 
-    const load = useCallback(async () => {
-        const [t, c, u, g, f, cn] = await Promise.all([
-            api.get("/tickets"), api.get("/contacts"),
-            api.get("/users").catch(() => ({ data: [] })),
-            api.get("/groups").catch(() => ({ data: [] })),
-            api.get("/ticket-fields").catch(() => ({ data: [] })),
-            api.get("/canned-responses").catch(() => ({ data: [] })),
-        ]);
-        setTickets(t.data); setContacts(c.data); setUsers(u.data); setGroups(g.data); setFields(f.data); setCanned(cn.data);
-        if (selected) {
-            const upd = t.data.find(x => x.id === selected.id);
-            if (upd) setSelected(upd);
+    // Load data
+    const loadData = useCallback(async () => {
+        try {
+            const [ticketsRes, contactsRes, usersRes] = await Promise.all([
+                api.get("/tickets"),
+                api.get("/contacts"),
+                api.get("/users").catch(() => ({ data: [] }))
+            ]);
+            
+            setTickets(ticketsRes.data || []);
+            setContacts(contactsRes.data || []);
+            setUsers(usersRes.data || []);
+            
+            // Update selected ticket if it exists
+            if (selectedTicket) {
+                const updated = ticketsRes.data.find(t => t.id === selectedTicket.id);
+                if (updated) setSelectedTicket(updated);
+            }
+        } catch (error) {
+            toast.error("Failed to load tickets");
+        } finally {
+            setLoading(false);
         }
-    }, [selected]);
-    useEffect(() => { load(); }, [load]);
+    }, [selectedTicket]);
 
-    const save = async (e) => {
+    useEffect(() => {
+        loadData();
+        // Auto-refresh every 30 seconds
+        const interval = setInterval(loadData, 30000);
+        return () => clearInterval(interval);
+    }, [loadData]);
+
+    // Filter and search tickets
+    const filteredTickets = useMemo(() => {
+        return tickets.filter(ticket => {
+            const matchesSearch = !search || 
+                ticket.subject.toLowerCase().includes(search.toLowerCase()) ||
+                ticket.description?.toLowerCase().includes(search.toLowerCase()) ||
+                ticket.requester_name?.toLowerCase().includes(search.toLowerCase());
+            
+            const matchesStatus = statusFilter === "all" || ticket.status === statusFilter;
+            const matchesPriority = priorityFilter === "all" || ticket.priority === priorityFilter;
+            const matchesAssignee = assigneeFilter === "all" || 
+                (assigneeFilter === "unassigned" && !ticket.assignee_id) ||
+                ticket.assignee_id === assigneeFilter;
+            
+            return matchesSearch && matchesStatus && matchesPriority && matchesAssignee;
+        });
+    }, [tickets, search, statusFilter, priorityFilter, assigneeFilter]);
+
+    // Create new ticket
+    const createTicket = async (e) => {
         e.preventDefault();
+        if (!newTicket.subject.trim()) {
+            toast.error("Subject is required");
+            return;
+        }
+        
+        setCreating(true);
         try {
-            await api.post("/tickets", { ...form, contact_id: form.contact_id || null });
-            toast.success("Ticket created");
-            setForm(empty); setOpen(false); load();
-        } catch (err) {
-            toast.error(err.response?.data?.detail || "Save failed");
+            await api.post("/tickets", {
+                ...newTicket,
+                contact_id: newTicket.contact_id || null,
+                status: "open",
+                channel: "internal"
+            });
+            
+            toast.success("Ticket created successfully");
+            setNewTicket({ subject: "", description: "", priority: "medium", contact_id: "" });
+            setShowCreateForm(false);
+            loadData();
+        } catch (error) {
+            toast.error(error.response?.data?.detail || "Failed to create ticket");
+        } finally {
+            setCreating(false);
         }
     };
 
-    const updateField = async (t, patch) => {
-        await api.put(`/tickets/${t.id}`, { ...t, ...patch });
-        load();
+    // Update ticket field
+    const updateTicket = async (ticketId, updates) => {
+        try {
+            await api.put(`/tickets/${ticketId}`, { ...selectedTicket, ...updates });
+            toast.success("Ticket updated");
+            loadData();
+        } catch (error) {
+            toast.error("Failed to update ticket");
+        }
     };
 
-    const assign = async (t, patch) => {
-        await api.patch(`/tickets/${t.id}/assign`, patch);
-        load();
-    };
-
-    const remove = async (id) => {
-        if (!window.confirm("Delete?")) return;
-        await api.delete(`/tickets/${id}`);
-        if (selected?.id === id) setSelected(null);
-        load();
-    };
-
+    // Add comment
     const addComment = async () => {
-        if (!comment.trim() || !selected) return;
-        await api.post(`/tickets/${selected.id}/comments`, { body: comment, internal });
-        setComment(""); setInternal(false);
-        load();
-    };
-
-    const aiDraft = async () => {
-        if (!selected) return;
-        setAiBusy(true);
+        if (!comment.trim() || !selectedTicket) return;
+        
+        setCommenting(true);
         try {
-            const ctx = `Ticket: ${selected.subject}\nDescription: ${selected.description}\nChannel: ${selected.channel}`;
-            const { data } = await api.post("/ai/summarize", { text: `Draft a friendly first reply for this ticket:\n${ctx}` });
-            setComment(data.summary);
-            toast.success("AI draft ready");
-        } catch (err) {
-            toast.error("AI failed");
+            await api.post(`/tickets/${selectedTicket.id}/comments`, {
+                body: comment.trim(),
+                internal: false
+            });
+            
+            setComment("");
+            toast.success("Comment added");
+            loadData();
+        } catch (error) {
+            toast.error("Failed to add comment");
+        } finally {
+            setCommenting(false);
         }
-        setAiBusy(false);
     };
 
-    const userById = (id) => users.find((u) => u.id === id);
+    // Get user name by ID
+    const getUserName = (userId) => {
+        const user = users.find(u => u.id === userId);
+        return user ? user.name : "Unassigned";
+    };
+
+    // Get contact name by ID
+    const getContactName = (contactId) => {
+        const contact = contacts.find(c => c.id === contactId);
+        return contact ? contact.name : null;
+    };
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center h-64">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+        );
+    }
 
     return (
-        <div className="p-6 md:p-10 max-w-[1400px]" data-testid="tickets-page">
-            <div className="flex items-end justify-between mb-8 flex-wrap gap-4">
-                <div>
-                    <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary mb-2">// support.queue</div>
-                    <h1 className="font-heading font-black text-4xl md:text-5xl tracking-tighter">Tickets</h1>
+        <div className="h-screen flex flex-col bg-gray-50">
+            {/* Header */}
+            <div className="bg-white border-b border-gray-200 px-6 py-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-2xl font-semibold text-gray-900">Support Tickets</h1>
+                        <p className="text-sm text-gray-600 mt-1">
+                            {filteredTickets.length} of {tickets.length} tickets
+                        </p>
+                    </div>
+                    <button
+                        onClick={() => setShowCreateForm(true)}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2"
+                    >
+                        <Plus className="w-4 h-4" />
+                        New Ticket
+                    </button>
                 </div>
-                <button data-testid="ticket-new-btn" onClick={() => setOpen(!open)} className="bg-brand text-white px-5 py-3 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-ink transition-all">
-                    <Plus className="w-4 h-4" /> New ticket
-                </button>
+
+                {/* Filters */}
+                <div className="flex items-center gap-4 mt-4 flex-wrap">
+                    <div className="relative flex-1 min-w-64">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                            type="text"
+                            placeholder="Search tickets..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                    </div>
+                    
+                    <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="all">All Status</option>
+                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+                            <option key={key} value={key}>{config.label}</option>
+                        ))}
+                    </select>
+
+                    <select
+                        value={priorityFilter}
+                        onChange={(e) => setPriorityFilter(e.target.value)}
+                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="all">All Priority</option>
+                        {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
+                            <option key={key} value={key}>{config.label}</option>
+                        ))}
+                    </select>
+
+                    <select
+                        value={assigneeFilter}
+                        onChange={(e) => setAssigneeFilter(e.target.value)}
+                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="all">All Assignees</option>
+                        <option value="unassigned">Unassigned</option>
+                        {users.map(user => (
+                            <option key={user.id} value={user.id}>{user.name}</option>
+                        ))}
+                    </select>
+                </div>
             </div>
 
-            {open && (
-                <form onSubmit={save} className="bg-white border-2 border-ink p-5 mb-6 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="ticket-form">
-                    <input data-testid="ticket-input-subject" required placeholder="Subject" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} className="md:col-span-2 bg-bg border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm" />
-                    <textarea data-testid="ticket-input-description" rows={3} placeholder="Describe…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="md:col-span-2 bg-bg border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm resize-none" />
-                    <select data-testid="ticket-input-contact" value={form.contact_id} onChange={(e) => setForm({ ...form, contact_id: e.target.value })} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-sm">
-                        <option value="">— linked contact —</option>
-                        {contacts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                    <select data-testid="ticket-input-priority" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-sm">
-                        {PRIORITY.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                    {/* Custom fields in form */}
-                    {fields.map((f) => (
-                        <div key={f.id} className="md:col-span-1">
-                            <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">{f.label}{f.required && " *"}</label>
-                            {f.type === "select" ? (
-                                <select data-testid={`ticket-cf-${f.key}`} required={f.required} value={form.custom[f.key] || ""} onChange={(e) => setForm({ ...form, custom: { ...form.custom, [f.key]: e.target.value } })} className="w-full bg-bg border-2 border-ink px-3 py-2 outline-none text-sm">
-                                    <option value="">—</option>
-                                    {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-                                </select>
-                            ) : f.type === "checkbox" ? (
-                                <input data-testid={`ticket-cf-${f.key}`} type="checkbox" checked={!!form.custom[f.key]} onChange={(e) => setForm({ ...form, custom: { ...form.custom, [f.key]: e.target.checked } })} className="w-4 h-4 accent-brand" />
-                            ) : (
-                                <input data-testid={`ticket-cf-${f.key}`} type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"} required={f.required} value={form.custom[f.key] || ""} onChange={(e) => setForm({ ...form, custom: { ...form.custom, [f.key]: e.target.value } })} className="w-full bg-bg border-2 border-ink px-3 py-2 outline-none text-sm" />
-                            )}
+            {/* Main Content */}
+            <div className="flex-1 flex overflow-hidden">
+                {/* Tickets List */}
+                <div className="w-1/2 border-r border-gray-200 bg-white overflow-y-auto">
+                    {filteredTickets.length === 0 ? (
+                        <div className="p-8 text-center text-gray-500">
+                            <MessageSquare className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                            <p>No tickets found</p>
                         </div>
-                    ))}
-                    <button data-testid="ticket-save-btn" type="submit" className="md:col-span-2 bg-ink text-white px-4 py-2 font-bold text-xs uppercase tracking-widest hover:bg-brand">Create ticket</button>
-                </form>
-            )}
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 bg-white border-2 border-ink overflow-hidden">
-                    {tickets.length === 0 ? (
-                        <div className="p-12 text-center text-inkSecondary">No tickets yet.</div>
-                    ) : tickets.map((t) => {
-                        const sla = slaState(t);
-                        const owner = userById(t.assignee_id);
-                        return (
-                            <div key={t.id} data-testid={`ticket-row-${t.id}`} onClick={() => setSelected(t)} className={`border-b border-line last:border-b-0 p-4 cursor-pointer hover:bg-bg ${selected?.id === t.id ? "bg-brand/5 border-l-4 border-l-brand" : ""}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center flex-wrap gap-2 mb-1">
-                                            <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${statusColor(t.status)}`}>{t.status}</span>
-                                            <span className={`text-[10px] font-mono uppercase tracking-widest ${priorityColor(t.priority)}`}>● {t.priority}</span>
-                                            {t.channel && t.channel !== "internal" && <span className="text-[10px] font-mono uppercase tracking-widest border border-ink px-1.5">{t.channel}</span>}
-                                            {sla && (
-                                                <span className={`text-[10px] font-mono uppercase tracking-widest px-1.5 flex items-center gap-1 ${sla.kind.startsWith("breach") ? "bg-bad text-white" : "border border-warn text-warn"}`}>
-                                                    {sla.kind.startsWith("breach") && <AlertTriangle className="w-3 h-3" />} {sla.label}
-                                                </span>
-                                            )}
-                                            {owner && <span className="text-[10px] font-mono uppercase tracking-widest text-brand">@{owner.name.split(" ")[0]}</span>}
+                    ) : (
+                        <div className="divide-y divide-gray-200">
+                            {filteredTickets.map((ticket) => {
+                                const StatusIcon = STATUS_CONFIG[ticket.status]?.icon || Circle;
+                                const PriorityIcon = PRIORITY_CONFIG[ticket.priority]?.icon || Minus;
+                                const isSelected = selectedTicket?.id === ticket.id;
+                                
+                                return (
+                                    <div
+                                        key={ticket.id}
+                                        onClick={() => setSelectedTicket(ticket)}
+                                        className={`p-4 cursor-pointer hover:bg-gray-50 transition-colors ${
+                                            isSelected ? "bg-blue-50 border-l-4 border-l-blue-600" : ""
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${STATUS_CONFIG[ticket.status]?.color}`}>
+                                                        <StatusIcon className="w-3 h-3" />
+                                                        {STATUS_CONFIG[ticket.status]?.label}
+                                                    </span>
+                                                    <span className={`inline-flex items-center gap-1 text-xs font-medium ${PRIORITY_CONFIG[ticket.priority]?.color}`}>
+                                                        <PriorityIcon className="w-3 h-3" />
+                                                        {PRIORITY_CONFIG[ticket.priority]?.label}
+                                                    </span>
+                                                </div>
+                                                
+                                                <h3 className="font-medium text-gray-900 truncate mb-1">
+                                                    {ticket.subject}
+                                                </h3>
+                                                
+                                                <p className="text-sm text-gray-600 line-clamp-2 mb-2">
+                                                    {ticket.description}
+                                                </p>
+                                                
+                                                <div className="flex items-center gap-4 text-xs text-gray-500">
+                                                    <span className="flex items-center gap-1">
+                                                        <User className="w-3 h-3" />
+                                                        {ticket.assignee_id ? getUserName(ticket.assignee_id) : "Unassigned"}
+                                                    </span>
+                                                    <span className="flex items-center gap-1">
+                                                        <Clock className="w-3 h-3" />
+                                                        {formatTime(ticket.created_at)}
+                                                    </span>
+                                                    {ticket.comments && ticket.comments.length > 0 && (
+                                                        <span className="flex items-center gap-1">
+                                                            <MessageSquare className="w-3 h-3" />
+                                                            {ticket.comments.length}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="font-bold text-sm truncate">{t.subject}</div>
-                                        <div className="text-xs text-inkSecondary mt-1 line-clamp-2">{t.description}</div>
                                     </div>
-                                    <button onClick={(e) => { e.stopPropagation(); remove(t.id); }} data-testid={`ticket-delete-${t.id}`} className="text-inkSecondary hover:text-bad"><Trash2 className="w-3.5 h-3.5" /></button>
-                                </div>
-                            </div>
-                        );
-                    })}
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
 
-                <div className="bg-white border-2 border-ink p-5 sticky top-6 h-fit">
-                    {selected ? (
-                        <>
-                            <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary mb-2">// ticket detail</div>
-                            <h3 className="font-heading font-black text-xl tracking-tighter mb-3">{selected.subject}</h3>
-                            <p className="text-sm text-inkSecondary mb-4 whitespace-pre-wrap">{selected.description}</p>
-
-                            <div className="grid grid-cols-2 gap-2 mb-3">
-                                <select data-testid="ticket-detail-status" value={selected.status} onChange={(e) => updateField(selected, { status: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs">
-                                    {STATUS.map((s) => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                                <select data-testid="ticket-detail-priority" value={selected.priority} onChange={(e) => updateField(selected, { priority: e.target.value })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs">
-                                    {PRIORITY.map((p) => <option key={p} value={p}>{p}</option>)}
-                                </select>
-                                <select data-testid="ticket-detail-assignee" value={selected.assignee_id || ""} onChange={(e) => assign(selected, { assignee_id: e.target.value || null })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs col-span-2">
-                                    <option value="">— assign agent —</option>
-                                    {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                                </select>
-                                <select data-testid="ticket-detail-group" value={selected.group_id || ""} onChange={(e) => assign(selected, { group_id: e.target.value || null })} className="bg-bg border-2 border-ink px-2 py-1.5 text-xs col-span-2">
-                                    <option value="">— group —</option>
-                                    {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                                </select>
-                            </div>
-
-                            {/* Custom fields display */}
-                            {fields.length > 0 && (
-                                <div className="bg-bg border-l-2 border-brand p-2 mb-3 space-y-1">
-                                    {fields.map((f) => (
-                                        <div key={f.id} className="text-xs flex justify-between">
-                                            <span className="text-inkSecondary uppercase tracking-widest text-[10px]">{f.label}:</span>
-                                            <span className="font-mono">{String(selected.custom?.[f.key] ?? "—")}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            {selected.requester_email && (
-                                <div className="text-xs text-inkSecondary mb-3 font-mono">From: {selected.requester_name} ({selected.requester_email})</div>
-                            )}
-
-                            <div className="border-t border-line pt-3">
-                                <div className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary mb-2 flex items-center gap-1">
-                                    <MessageSquarePlus className="w-3 h-3" /> Comments
-                                </div>
-                                <div className="space-y-2 max-h-64 overflow-y-auto mb-3">
-                                    {(selected.comments || []).map((c) => (
-                                        <div key={c.id} className={`border-l-2 p-2 ${c.internal ? "bg-warn/10 border-warn" : "bg-bg border-brand"}`}>
-                                            <div className="text-[10px] font-mono uppercase text-inkSecondary flex items-center gap-2">
-                                                {c.internal ? <Lock className="w-3 h-3 text-warn" /> : <Globe className="w-3 h-3 text-brand" />}
-                                                {c.author} · {new Date(c.created_at).toLocaleString()}
-                                                {c.internal && <span className="text-warn">internal</span>}
-                                            </div>
-                                            <div className="text-xs mt-1 whitespace-pre-wrap">{c.body}</div>
-                                        </div>
-                                    ))}
-                                    {(selected.comments || []).length === 0 && <div className="text-xs text-inkSecondary">No comments yet.</div>}
-                                </div>
-
-                                {/* Composer */}
-                                <div className="space-y-2">
-                                    <div className="flex gap-1 flex-wrap">
-                                        <button data-testid="comment-toggle-internal" onClick={() => setInternal(!internal)} className={`text-[10px] font-bold uppercase tracking-widest border-2 px-2 py-1 flex items-center gap-1 ${internal ? "bg-warn text-ink border-warn" : "border-ink text-ink hover:bg-ink hover:text-white"}`}>
-                                            {internal ? <Lock className="w-3 h-3" /> : <Globe className="w-3 h-3" />} {internal ? "Internal" : "Public"}
-                                        </button>
-                                        <button data-testid="comment-canned-toggle" onClick={() => setShowCanned(!showCanned)} className="text-[10px] font-bold uppercase tracking-widest border-2 border-ink px-2 py-1 hover:bg-ink hover:text-white">Canned ({canned.length})</button>
-                                        <button data-testid="comment-ai-draft" onClick={aiDraft} disabled={aiBusy} className="text-[10px] font-bold uppercase tracking-widest border-2 border-brand px-2 py-1 text-brand hover:bg-brand hover:text-white flex items-center gap-1 disabled:opacity-50">
-                                            <Sparkles className="w-3 h-3" /> {aiBusy ? "…" : "AI draft"}
-                                        </button>
-                                    </div>
-                                    {showCanned && (
-                                        <div className="bg-bg border border-ink p-2 max-h-40 overflow-y-auto" data-testid="canned-picker">
-                                            {canned.length === 0 && <div className="text-xs text-inkSecondary">Add canned responses in Settings → Helpdesk.</div>}
-                                            {canned.map((c) => (
-                                                <button key={c.id} data-testid={`canned-pick-${c.id}`} onClick={() => { setComment(c.body); setShowCanned(false); }} className="block w-full text-left text-xs border-b border-line py-2 hover:bg-white px-2">
-                                                    <span className="font-bold">{c.name}</span> {c.shortcut && <span className="font-mono text-brand text-[10px]">{c.shortcut}</span>}
-                                                    <div className="text-inkSecondary line-clamp-1">{c.body}</div>
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                    <textarea data-testid="ticket-comment-input" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder={internal ? "Internal note (only your team sees this)…" : "Public reply…"} className="w-full bg-bg border-2 border-ink px-2 py-1.5 text-xs outline-none focus:border-brand resize-none" />
-                                    <button data-testid="ticket-comment-send" onClick={addComment} className="w-full bg-brand text-white px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink flex items-center justify-center gap-2">
-                                        <Send className="w-3 h-3" /> {internal ? "Add note" : "Send reply"}
+                {/* Ticket Details */}
+                <div className="w-1/2 bg-white overflow-y-auto">
+                    {selectedTicket ? (
+                        <div className="p-6">
+                            {/* Ticket Header */}
+                            <div className="border-b border-gray-200 pb-4 mb-6">
+                                <div className="flex items-start justify-between gap-4 mb-4">
+                                    <h2 className="text-xl font-semibold text-gray-900">
+                                        {selectedTicket.subject}
+                                    </h2>
+                                    <button
+                                        onClick={() => setSelectedTicket(null)}
+                                        className="text-gray-400 hover:text-gray-600"
+                                    >
+                                        <X className="w-5 h-5" />
                                     </button>
                                 </div>
+                                
+                                <p className="text-gray-700 mb-4 whitespace-pre-wrap">
+                                    {selectedTicket.description}
+                                </p>
+
+                                {/* Quick Actions */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    <select
+                                        value={selectedTicket.status}
+                                        onChange={(e) => updateTicket(selectedTicket.id, { status: e.target.value })}
+                                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+                                            <option key={key} value={key}>{config.label}</option>
+                                        ))}
+                                    </select>
+
+                                    <select
+                                        value={selectedTicket.priority}
+                                        onChange={(e) => updateTicket(selectedTicket.id, { priority: e.target.value })}
+                                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
+                                            <option key={key} value={key}>{config.label}</option>
+                                        ))}
+                                    </select>
+
+                                    <select
+                                        value={selectedTicket.assignee_id || ""}
+                                        onChange={(e) => updateTicket(selectedTicket.id, { assignee_id: e.target.value || null })}
+                                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 col-span-2"
+                                    >
+                                        <option value="">Unassigned</option>
+                                        {users.map(user => (
+                                            <option key={user.id} value={user.id}>{user.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Ticket Meta */}
+                                <div className="mt-4 text-sm text-gray-600 space-y-1">
+                                    <div>Created: {new Date(selectedTicket.created_at).toLocaleString()}</div>
+                                    {selectedTicket.requester_name && (
+                                        <div>Requester: {selectedTicket.requester_name}</div>
+                                    )}
+                                    {selectedTicket.contact_id && (
+                                        <div>Contact: {getContactName(selectedTicket.contact_id)}</div>
+                                    )}
+                                </div>
                             </div>
-                        </>
+
+                            {/* Comments */}
+                            <div className="space-y-4">
+                                <h3 className="font-medium text-gray-900">Comments</h3>
+                                
+                                <div className="space-y-3 max-h-96 overflow-y-auto">
+                                    {selectedTicket.comments && selectedTicket.comments.length > 0 ? (
+                                        selectedTicket.comments.map((comment) => (
+                                            <div key={comment.id} className="bg-gray-50 rounded-lg p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <span className="font-medium text-sm text-gray-900">
+                                                        {comment.author}
+                                                    </span>
+                                                    <span className="text-xs text-gray-500">
+                                                        {new Date(comment.created_at).toLocaleString()}
+                                                    </span>
+                                                </div>
+                                                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                                                    {comment.body}
+                                                </p>
+                                                {comment.internal && (
+                                                    <span className="inline-block mt-2 px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded">
+                                                        Internal Note
+                                                    </span>
+                                                )}
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p className="text-gray-500 text-sm">No comments yet</p>
+                                    )}
+                                </div>
+
+                                {/* Add Comment */}
+                                <div className="border-t border-gray-200 pt-4">
+                                    <textarea
+                                        value={comment}
+                                        onChange={(e) => setComment(e.target.value)}
+                                        placeholder="Add a comment..."
+                                        rows={3}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                                    />
+                                    <div className="flex justify-end mt-2">
+                                        <button
+                                            onClick={addComment}
+                                            disabled={commenting || !comment.trim()}
+                                            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        >
+                                            {commenting ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Send className="w-4 h-4" />
+                                            )}
+                                            Add Comment
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     ) : (
-                        <div className="text-sm text-inkSecondary text-center py-8">Select a ticket to view details</div>
+                        <div className="flex items-center justify-center h-full text-gray-500">
+                            <div className="text-center">
+                                <Eye className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                                <p>Select a ticket to view details</p>
+                            </div>
+                        </div>
                     )}
                 </div>
             </div>
+
+            {/* Create Ticket Modal */}
+            {showCreateForm && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg p-6 w-full max-w-md">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Create New Ticket</h3>
+                            <button
+                                onClick={() => setShowCreateForm(false)}
+                                className="text-gray-400 hover:text-gray-600"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <form onSubmit={createTicket} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Subject *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={newTicket.subject}
+                                    onChange={(e) => setNewTicket({ ...newTicket, subject: e.target.value })}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="Brief description of the issue"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Description
+                                </label>
+                                <textarea
+                                    value={newTicket.description}
+                                    onChange={(e) => setNewTicket({ ...newTicket, description: e.target.value })}
+                                    rows={3}
+                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                                    placeholder="Detailed description of the issue"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        Priority
+                                    </label>
+                                    <select
+                                        value={newTicket.priority}
+                                        onChange={(e) => setNewTicket({ ...newTicket, priority: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
+                                            <option key={key} value={key}>{config.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        Contact
+                                    </label>
+                                    <select
+                                        value={newTicket.contact_id}
+                                        onChange={(e) => setNewTicket({ ...newTicket, contact_id: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        <option value="">No contact</option>
+                                        {contacts.map(contact => (
+                                            <option key={contact.id} value={contact.id}>{contact.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3 justify-end pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCreateForm(false)}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={creating}
+                                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                    {creating ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Plus className="w-4 h-4" />
+                                    )}
+                                    Create Ticket
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

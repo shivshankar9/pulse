@@ -10,7 +10,7 @@ import Pipeline from "./pages/Pipeline";
 import Activities from "./pages/Activities";
 import Emails from "./pages/Emails";
 import AIAssistant from "./pages/AIAssistant";
-import Tickets from "./pages/Tickets";
+import Tickets from "./pages/TicketsComplex";
 import Channels from "./pages/Channels";
 import WhatsAppInbox from "./pages/WhatsApp";
 import Settings from "./pages/Settings";
