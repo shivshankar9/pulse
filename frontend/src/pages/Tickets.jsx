@@ -4,15 +4,15 @@ import {
     Plus, Search, Clock, User, MessageSquare, 
     CheckCircle, AlertCircle, Circle, Send, Loader2,
     ArrowUp, ArrowDown, Minus, X, Eye, Zap, Filter,
-    RefreshCw, Archive, Edit3
+    RefreshCw, Edit, Trash2
 } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_CONFIG = {
-    open: { label: "Open", color: "bg-red-100 text-red-800", icon: Circle },
-    pending: { label: "Pending", color: "bg-yellow-100 text-yellow-800", icon: Clock },
-    resolved: { label: "Resolved", color: "bg-green-100 text-green-800", icon: CheckCircle },
-    closed: { label: "Closed", color: "bg-gray-100 text-gray-800", icon: CheckCircle }
+    open: { label: "Open", color: "bg-red-100 text-red-800 border-red-200", icon: Circle },
+    pending: { label: "Pending", color: "bg-yellow-100 text-yellow-800 border-yellow-200", icon: Clock },
+    resolved: { label: "Resolved", color: "bg-green-100 text-green-800 border-green-200", icon: CheckCircle },
+    closed: { label: "Closed", color: "bg-gray-100 text-gray-800 border-gray-200", icon: CheckCircle }
 };
 
 const PRIORITY_CONFIG = {
@@ -31,6 +31,7 @@ const formatTime = (dateString) => {
     const diffHours = Math.floor(diffMins / 60);
     const diffDays = Math.floor(diffHours / 24);
 
+    if (diffMins < 1) return "Just now";
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
@@ -64,9 +65,8 @@ const Tickets = () => {
     const [comment, setComment] = useState("");
     const [showCannedPicker, setShowCannedPicker] = useState(false);
 
-    // Load data with better error handling and performance
-    const loadData = useCallback(async (showLoading = true) => {
-        if (showLoading) setLoading(true);
+    // Load data with better performance
+    const loadData = useCallback(async () => {
         try {
             const [ticketsRes, contactsRes, usersRes, cannedRes] = await Promise.all([
                 api.get("/tickets"),
@@ -89,24 +89,28 @@ const Tickets = () => {
             console.error("Failed to load data:", error);
             toast.error("Failed to load tickets");
         } finally {
-            if (showLoading) setLoading(false);
+            setLoading(false);
         }
     }, [selectedTicket]);
 
     useEffect(() => {
         loadData();
-        // Auto-refresh every 60 seconds (increased from 30s for better performance)
-        const interval = setInterval(() => loadData(false), 60000);
+        // Auto-refresh every 60 seconds
+        const interval = setInterval(loadData, 60000);
         return () => clearInterval(interval);
     }, [loadData]);
 
-    // Filter and search tickets
+    // Enhanced filtering with better performance
     const filteredTickets = useMemo(() => {
+        if (!tickets || tickets.length === 0) return [];
+        
         return tickets.filter(ticket => {
+            if (!ticket) return false;
+            
             const matchesSearch = !search || 
-                ticket.subject.toLowerCase().includes(search.toLowerCase()) ||
-                ticket.description?.toLowerCase().includes(search.toLowerCase()) ||
-                ticket.requester_name?.toLowerCase().includes(search.toLowerCase());
+                (ticket.subject && ticket.subject.toLowerCase().includes(search.toLowerCase())) ||
+                (ticket.description && ticket.description.toLowerCase().includes(search.toLowerCase())) ||
+                (ticket.requester_name && ticket.requester_name.toLowerCase().includes(search.toLowerCase()));
             
             const matchesStatus = statusFilter === "all" || ticket.status === statusFilter;
             const matchesPriority = priorityFilter === "all" || ticket.priority === priorityFilter;
@@ -117,6 +121,15 @@ const Tickets = () => {
             return matchesSearch && matchesStatus && matchesPriority && matchesAssignee;
         });
     }, [tickets, search, statusFilter, priorityFilter, assigneeFilter]);
+
+    // Quick stats
+    const stats = useMemo(() => {
+        const total = tickets.length;
+        const open = tickets.filter(t => t.status === 'open').length;
+        const pending = tickets.filter(t => t.status === 'pending').length;
+        const resolved = tickets.filter(t => t.status === 'resolved').length;
+        return { total, open, pending, resolved };
+    }, [tickets]);
 
     // Create new ticket
     const createTicket = async (e) => {
@@ -207,26 +220,40 @@ const Tickets = () => {
 
     return (
         <div className="h-screen flex flex-col bg-gray-50">
-            {/* Header */}
-            <div className="bg-white border-b border-gray-200 px-6 py-4">
-                <div className="flex items-center justify-between">
+            {/* Enhanced Header */}
+            <div className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
                     <div>
-                        <h1 className="text-2xl font-semibold text-gray-900">Support Tickets</h1>
-                        <p className="text-sm text-gray-600 mt-1">
-                            {filteredTickets.length} of {tickets.length} tickets
-                        </p>
+                        <h1 className="text-2xl font-bold text-gray-900">Support Tickets</h1>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-600">
+                            <span className="flex items-center gap-1">
+                                <Circle className="w-3 h-3 text-red-500" />
+                                {stats.open} Open
+                            </span>
+                            <span className="flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-yellow-500" />
+                                {stats.pending} Pending
+                            </span>
+                            <span className="flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3 text-green-500" />
+                                {stats.resolved} Resolved
+                            </span>
+                            <span className="text-gray-500">
+                                {filteredTickets.length} of {stats.total} total
+                            </span>
+                        </div>
                     </div>
                     <div className="flex items-center gap-3">
                         <button
-                            onClick={() => loadData(false)}
-                            className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-medium hover:bg-gray-200 flex items-center gap-2"
+                            onClick={loadData}
+                            className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-200 flex items-center gap-2 transition-colors"
                         >
                             <RefreshCw className="w-4 h-4" />
                             Refresh
                         </button>
                         <button
                             onClick={() => setShowCreateForm(true)}
-                            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2"
+                            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 transition-colors"
                         >
                             <Plus className="w-4 h-4" />
                             New Ticket
@@ -235,8 +262,8 @@ const Tickets = () => {
                 </div>
 
                 {/* Enhanced Filters */}
-                <div className="flex items-center gap-4 mt-4 flex-wrap">
-                    <div className="relative flex-1 min-w-64">
+                <div className="flex items-center gap-4 flex-wrap">
+                    <div className="relative flex-1 min-w-80">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
                             type="text"
@@ -252,7 +279,7 @@ const Tickets = () => {
                         <select
                             value={statusFilter}
                             onChange={(e) => setStatusFilter(e.target.value)}
-                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm min-w-32"
                         >
                             <option value="all">All Status</option>
                             {Object.entries(STATUS_CONFIG).map(([key, config]) => (
@@ -263,7 +290,7 @@ const Tickets = () => {
                         <select
                             value={priorityFilter}
                             onChange={(e) => setPriorityFilter(e.target.value)}
-                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm min-w-32"
                         >
                             <option value="all">All Priority</option>
                             {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
@@ -274,7 +301,7 @@ const Tickets = () => {
                         <select
                             value={assigneeFilter}
                             onChange={(e) => setAssigneeFilter(e.target.value)}
-                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm min-w-36"
                         >
                             <option value="all">All Assignees</option>
                             <option value="unassigned">Unassigned</option>

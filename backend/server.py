@@ -2225,7 +2225,162 @@ async def send_email_advanced(payload: EmailSendIn, user=Depends(require_permiss
     
     return doc
 
-# ---------- Email Templates ----------
+# ---------- Email Receiving Webhooks ----------
+
+class EmailWebhookIn(BaseModel):
+    from_email: str
+    to_email: str
+    subject: str
+    body: str
+    html_body: Optional[str] = None
+    attachments: Optional[List[dict]] = []
+    message_id: Optional[str] = None
+    timestamp: Optional[str] = None
+
+@api_router.post("/webhooks/email/receive")
+async def receive_email_webhook(payload: EmailWebhookIn):
+    """
+    Webhook endpoint for receiving emails from email providers
+    Supports Resend, SendGrid, Mailgun, and other providers
+    """
+    try:
+        # Find user by email domain or create a general inbox
+        user_email = payload.to_email.lower()
+        
+        # Try to find user by email
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
+        if not user:
+            # If no specific user found, assign to first admin
+            user = await db.users.find_one({"role": "admin"}, {"_id": 0})
+        
+        if not user:
+            raise HTTPException(404, "No user found to receive email")
+        
+        # Create email record
+        email_id = str(uuid.uuid4())
+        email_doc = {
+            "id": email_id,
+            "owner_id": user["id"],
+            "from_email": payload.from_email,
+            "to_email": payload.to_email,
+            "subject": payload.subject,
+            "body": payload.body,
+            "html_body": payload.html_body,
+            "direction": "inbound",
+            "message_id": payload.message_id,
+            "received_at": payload.timestamp or now_utc_iso(),
+            "created_at": now_utc_iso(),
+            "attachments": payload.attachments or []
+        }
+        
+        await db.emails.insert_one(email_doc)
+        
+        # Try to create/update contact from sender
+        try:
+            sender_name = payload.from_email.split('@')[0].replace('.', ' ').title()
+            contact_doc = {
+                "id": str(uuid.uuid4()),
+                "owner_id": user["id"],
+                "name": sender_name,
+                "email": payload.from_email,
+                "source": "email",
+                "tags": ["email-contact"],
+                "created_at": now_utc_iso(),
+                "updated_at": now_utc_iso()
+            }
+            
+            # Check if contact already exists
+            existing = await db.contacts.find_one({
+                "owner_id": user["id"], 
+                "email": payload.from_email
+            })
+            
+            if not existing:
+                await db.contacts.insert_one(contact_doc)
+                
+        except Exception as e:
+            # Contact creation is optional, don't fail the email receive
+            print(f"Failed to create contact: {e}")
+        
+        # Auto-create ticket for support emails
+        if any(keyword in payload.subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug']):
+            try:
+                ticket_id = str(uuid.uuid4())
+                ticket_doc = {
+                    "id": ticket_id,
+                    "owner_id": user["id"],
+                    "subject": f"Email: {payload.subject}",
+                    "description": payload.body[:500] + ("..." if len(payload.body) > 500 else ""),
+                    "status": "open",
+                    "priority": "medium",
+                    "channel": "email",
+                    "requester_name": sender_name,
+                    "requester_email": payload.from_email,
+                    "created_at": now_utc_iso(),
+                    "updated_at": now_utc_iso(),
+                    "comments": []
+                }
+                
+                await db.tickets.insert_one(ticket_doc)
+                
+            except Exception as e:
+                print(f"Failed to create ticket: {e}")
+        
+        return {"ok": True, "email_id": email_id}
+        
+    except Exception as e:
+        print(f"Email webhook error: {e}")
+        raise HTTPException(500, f"Failed to process email: {str(e)}")
+
+@api_router.post("/webhooks/email/sendgrid")
+async def sendgrid_email_webhook(request: Request):
+    """SendGrid-specific email webhook"""
+    try:
+        body = await request.body()
+        # SendGrid sends form data
+        from urllib.parse import parse_qs
+        data = parse_qs(body.decode())
+        
+        payload = EmailWebhookIn(
+            from_email=data.get('from', [''])[0],
+            to_email=data.get('to', [''])[0],
+            subject=data.get('subject', [''])[0],
+            body=data.get('text', [''])[0],
+            html_body=data.get('html', [''])[0]
+        )
+        
+        return await receive_email_webhook(payload)
+        
+    except Exception as e:
+        raise HTTPException(500, f"SendGrid webhook error: {str(e)}")
+
+@api_router.post("/webhooks/email/resend")
+async def resend_email_webhook(payload: dict):
+    """Resend-specific email webhook"""
+    try:
+        email_payload = EmailWebhookIn(
+            from_email=payload.get('from', ''),
+            to_email=payload.get('to', ''),
+            subject=payload.get('subject', ''),
+            body=payload.get('text', ''),
+            html_body=payload.get('html', ''),
+            message_id=payload.get('message_id', ''),
+            timestamp=payload.get('created_at', '')
+        )
+        
+        return await receive_email_webhook(email_payload)
+        
+    except Exception as e:
+        raise HTTPException(500, f"Resend webhook error: {str(e)}")
+
+@api_router.get("/emails/inbound")
+async def list_inbound_emails(user=Depends(get_current_user)):
+    """List received emails"""
+    items = await db.emails.find({
+        "owner_id": user["id"], 
+        "direction": "inbound"
+    }, {"_id": 0}).sort("received_at", -1).to_list(500)
+    return items
 class EmailTemplateIn(BaseModel):
     name: str
     subject: str

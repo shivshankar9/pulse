@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import api from "../lib/api";
-import { Send, Sparkles, RefreshCw, Search, Filter, User, Calendar, Zap } from "lucide-react";
+import { Send, Sparkles, RefreshCw, Search, Filter, User, Calendar, Zap, X, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 const Emails = () => {
@@ -11,13 +11,14 @@ const Emails = () => {
     const [form, setForm] = useState({ contact_id: "", to: "", subject: "", body: "" });
     const [drafting, setDrafting] = useState(false);
     const [sending, setSending] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [intent, setIntent] = useState("");
     const [search, setSearch] = useState("");
     const [contactFilter, setContactFilter] = useState("all");
     const [showTemplates, setShowTemplates] = useState(false);
     const [showCanned, setShowCanned] = useState(false);
 
-    const load = useCallback(async (showLoading = false) => {
+    const load = useCallback(async () => {
         try {
             const [e, c, t, cr] = await Promise.all([
                 api.get("/emails"), 
@@ -32,23 +33,28 @@ const Emails = () => {
         } catch (error) {
             console.error("Failed to load data:", error);
             toast.error("Failed to load emails");
+        } finally {
+            setLoading(false);
         }
     }, []);
 
     useEffect(() => { 
         load(); 
         // Auto-refresh every 2 minutes
-        const interval = setInterval(() => load(false), 120000);
+        const interval = setInterval(load, 120000);
         return () => clearInterval(interval);
     }, [load]);
 
     // Filter emails
     const filteredEmails = useMemo(() => {
+        if (!emails || emails.length === 0) return [];
         return emails.filter(email => {
+            if (!email) return false;
+            
             const matchesSearch = !search || 
-                email.subject.toLowerCase().includes(search.toLowerCase()) ||
-                email.to.toLowerCase().includes(search.toLowerCase()) ||
-                email.body.toLowerCase().includes(search.toLowerCase());
+                (email.subject && email.subject.toLowerCase().includes(search.toLowerCase())) ||
+                (email.to && email.to.toLowerCase().includes(search.toLowerCase())) ||
+                (email.body && email.body.toLowerCase().includes(search.toLowerCase()));
             
             const matchesContact = contactFilter === "all" || 
                 email.contact_id === contactFilter;
