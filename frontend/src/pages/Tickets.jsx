@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import api from "../lib/api";
 import { 
-    Plus, Search, Filter, Clock, User, MessageSquare, 
+    Plus, Search, Clock, User, MessageSquare, 
     CheckCircle, AlertCircle, Circle, Send, Loader2,
-    ArrowUp, ArrowDown, Minus, X, Edit3, Eye, Zap
+    ArrowUp, ArrowDown, Minus, X, Eye, Zap, Filter,
+    RefreshCw, Archive, Edit3
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -63,8 +64,9 @@ const Tickets = () => {
     const [comment, setComment] = useState("");
     const [showCannedPicker, setShowCannedPicker] = useState(false);
 
-    // Load data
-    const loadData = useCallback(async () => {
+    // Load data with better error handling and performance
+    const loadData = useCallback(async (showLoading = true) => {
+        if (showLoading) setLoading(true);
         try {
             const [ticketsRes, contactsRes, usersRes, cannedRes] = await Promise.all([
                 api.get("/tickets"),
@@ -84,16 +86,17 @@ const Tickets = () => {
                 if (updated) setSelectedTicket(updated);
             }
         } catch (error) {
+            console.error("Failed to load data:", error);
             toast.error("Failed to load tickets");
         } finally {
-            setLoading(false);
+            if (showLoading) setLoading(false);
         }
     }, [selectedTicket]);
 
     useEffect(() => {
         loadData();
-        // Auto-refresh every 30 seconds
-        const interval = setInterval(loadData, 30000);
+        // Auto-refresh every 60 seconds (increased from 30s for better performance)
+        const interval = setInterval(() => loadData(false), 60000);
         return () => clearInterval(interval);
     }, [loadData]);
 
@@ -213,61 +216,73 @@ const Tickets = () => {
                             {filteredTickets.length} of {tickets.length} tickets
                         </p>
                     </div>
-                    <button
-                        onClick={() => setShowCreateForm(true)}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2"
-                    >
-                        <Plus className="w-4 h-4" />
-                        New Ticket
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => loadData(false)}
+                            className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-medium hover:bg-gray-200 flex items-center gap-2"
+                        >
+                            <RefreshCw className="w-4 h-4" />
+                            Refresh
+                        </button>
+                        <button
+                            onClick={() => setShowCreateForm(true)}
+                            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2"
+                        >
+                            <Plus className="w-4 h-4" />
+                            New Ticket
+                        </button>
+                    </div>
                 </div>
 
-                {/* Filters */}
+                {/* Enhanced Filters */}
                 <div className="flex items-center gap-4 mt-4 flex-wrap">
                     <div className="relative flex-1 min-w-64">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
                             type="text"
-                            placeholder="Search tickets..."
+                            placeholder="Search tickets, descriptions, or contacts..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
                     </div>
                     
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                        <option value="all">All Status</option>
-                        {Object.entries(STATUS_CONFIG).map(([key, config]) => (
-                            <option key={key} value={key}>{config.label}</option>
-                        ))}
-                    </select>
+                    <div className="flex items-center gap-2">
+                        <Filter className="w-4 h-4 text-gray-500" />
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        >
+                            <option value="all">All Status</option>
+                            {Object.entries(STATUS_CONFIG).map(([key, config]) => (
+                                <option key={key} value={key}>{config.label}</option>
+                            ))}
+                        </select>
 
-                    <select
-                        value={priorityFilter}
-                        onChange={(e) => setPriorityFilter(e.target.value)}
-                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                        <option value="all">All Priority</option>
-                        {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
-                            <option key={key} value={key}>{config.label}</option>
-                        ))}
-                    </select>
+                        <select
+                            value={priorityFilter}
+                            onChange={(e) => setPriorityFilter(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        >
+                            <option value="all">All Priority</option>
+                            {Object.entries(PRIORITY_CONFIG).map(([key, config]) => (
+                                <option key={key} value={key}>{config.label}</option>
+                            ))}
+                        </select>
 
-                    <select
-                        value={assigneeFilter}
-                        onChange={(e) => setAssigneeFilter(e.target.value)}
-                        className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                        <option value="all">All Assignees</option>
-                        <option value="unassigned">Unassigned</option>
-                        {users.map(user => (
-                            <option key={user.id} value={user.id}>{user.name}</option>
-                        ))}
-                    </select>
+                        <select
+                            value={assigneeFilter}
+                            onChange={(e) => setAssigneeFilter(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        >
+                            <option value="all">All Assignees</option>
+                            <option value="unassigned">Unassigned</option>
+                            {users.map(user => (
+                                <option key={user.id} value={user.id}>{user.name}</option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
             </div>
 

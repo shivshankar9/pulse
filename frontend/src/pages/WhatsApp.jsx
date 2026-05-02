@@ -90,7 +90,11 @@ const WhatsAppInbox = () => {
             const { data } = await api.get("/integrations");
             setIntegrations(data || {});
         } catch (e) {
-            // silent
+            // If user doesn't have permission to view integrations (e.g., agents),
+            // assume WhatsApp is configured to avoid showing config prompts
+            if (e.response?.status === 403) {
+                setIntegrations({ whatsapp_business: { configured: true } });
+            }
         }
     };
 
