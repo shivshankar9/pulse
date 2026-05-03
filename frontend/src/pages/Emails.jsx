@@ -206,6 +206,14 @@ const Emails = () => {
         setSelectedEmails(newSelected);
     };
 
+    const selectAllEmails = () => {
+        if (selectedEmails.size === filteredEmails.length && filteredEmails.length > 0) {
+            setSelectedEmails(new Set());
+        } else {
+            setSelectedEmails(new Set(filteredEmails.map(e => e.id)));
+        }
+    };
+
     const createTicketFromEmail = async (email) => {
         try {
             const response = await api.post(`/emails/${email.id}/create-ticket`);
