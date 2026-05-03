@@ -437,8 +437,8 @@ const WhatsAppInbox = () => {
 
     return (
         <div className="flex h-screen bg-gray-50">
-            {/* Left Sidebar - Conversations */}
-            <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
+            {/* Left Sidebar - Conversations - Responsive */}
+            <div className={`${selectedPhone ? 'hidden lg:block' : 'block'} w-full lg:w-80 bg-white border-r border-gray-200 flex flex-col`}>
                 {/* Header */}
                 <div className="p-4 border-b border-gray-200">
                     <div className="flex items-center justify-between mb-3">
@@ -569,8 +569,8 @@ const WhatsAppInbox = () => {
                 </div>
             </div>
 
-            {/* Right Side - Chat Area */}
-            <div className="flex-1 flex flex-col">
+            {/* Right Side - Chat Area - Responsive */}
+            <div className={`${selectedPhone ? 'block' : 'hidden lg:block'} flex-1 flex flex-col`}>
                 {!selectedPhone ? (
                     <div className="flex-1 flex items-center justify-center bg-gray-50">
                         <div className="text-center max-w-md">
@@ -596,9 +596,20 @@ const WhatsAppInbox = () => {
                     </div>
                 ) : (
                     <>
+                        {/* Mobile Back Button */}
+                        <div className="lg:hidden px-4 py-3 border-b border-gray-200 bg-gray-50">
+                            <button
+                                onClick={() => setSelectedPhone(null)}
+                                className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+                            >
+                                <X className="w-4 h-4 rotate-180" />
+                                <span className="text-sm font-medium">Back to conversations</span>
+                            </button>
+                        </div>
+
                         {/* Chat Header */}
                         <div className="bg-white border-b border-gray-200 p-4">
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                 <div className="flex items-center gap-3">
                                     <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-sm font-medium text-green-700">
                                         {initials(selectedConv?.contact_name, selectedPhone)}
@@ -634,14 +645,14 @@ const WhatsAppInbox = () => {
                                 </div>
                                 
                                 {/* Action Buttons */}
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <button
                                         onClick={openSyncContact}
                                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
                                         title={selectedConv?.contact_id ? "Update contact" : "Sync as lead"}
                                     >
                                         <UserPlus className="w-4 h-4" />
-                                        {selectedConv?.contact_id ? "Contact" : "Sync Lead"}
+                                        <span className="hidden sm:inline">{selectedConv?.contact_id ? "Contact" : "Sync Lead"}</span>
                                     </button>
                                     <button
                                         onClick={openCreateTicket}
@@ -649,7 +660,7 @@ const WhatsAppInbox = () => {
                                         title="Create a support ticket from this conversation"
                                     >
                                         <Ticket className="w-4 h-4" />
-                                        Ticket
+                                        <span className="hidden sm:inline">Ticket</span>
                                     </button>
                                     <div className="relative">
                                         <button
@@ -661,7 +672,7 @@ const WhatsAppInbox = () => {
                                             }`}
                                         >
                                             <Users className="w-4 h-4" />
-                                            {selectedConv?.assigned_to_name ? "Reassign" : "Assign"}
+                                            <span className="hidden sm:inline">{selectedConv?.assigned_to_name ? "Reassign" : "Assign"}</span>
                                         </button>
                                         {showAssign && (
                                             <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg w-72 z-40">
@@ -791,14 +802,14 @@ const WhatsAppInbox = () => {
                                         className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
                                     >
                                         <BookTemplate className="w-4 h-4" />
-                                        Template
+                                        <span className="hidden sm:inline">Template</span>
                                     </button>
                                     <button
                                         onClick={openCannedPicker}
                                         className="bg-purple-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2"
                                     >
                                         <Zap className="w-4 h-4" />
-                                        Quick Reply
+                                        <span className="hidden sm:inline">Quick Reply</span>
                                     </button>
                                 </div>
                                 
@@ -822,7 +833,7 @@ const WhatsAppInbox = () => {
                                         ) : (
                                             <Send className="w-4 h-4" />
                                         )}
-                                        Send
+                                        <span className="hidden sm:inline">Send</span>
                                     </button>
                                 </div>
                             </div>

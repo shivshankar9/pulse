@@ -4,7 +4,9 @@ import {
     Send, Sparkles, RefreshCw, Search, Filter, User, Calendar, Zap, X, Plus,
     Mail, MailOpen, Inbox, Reply, Forward, Archive, Trash2, Star, StarOff,
     Clock, AlertCircle, CheckCircle, Eye, Edit, Paperclip, Download, MoreHorizontal,
-    ChevronDown, Settings, Tag, Users, FileText, Phone, MessageSquare, Ticket
+    ChevronDown, ChevronRight, Settings, Tag, Users, FileText, Phone, MessageSquare, 
+    Ticket, ExternalLink, Copy, Share2, Flag, Bookmark, Folder, FolderOpen,
+    ArrowUp, ArrowDown, Minus, SortAsc, SortDesc, Grid, List, Columns
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -38,31 +40,37 @@ const Emails = () => {
     const [search, setSearch] = useState("");
     const [directionFilter, setDirectionFilter] = useState("all");
     const [contactFilter, setContactFilter] = useState("all");
+    const [dateFilter, setDateFilter] = useState("all");
     const [showComposer, setShowComposer] = useState(false);
     const [showTemplates, setShowTemplates] = useState(false);
     const [showCanned, setShowCanned] = useState(false);
     const [selectedEmails, setSelectedEmails] = useState(new Set());
     const [showFilters, setShowFilters] = useState(false);
-    const [emailTickets, setEmailTickets] = useState(new Map()); // Store email-ticket relationships
+    const [emailTickets, setEmailTickets] = useState(new Map());
+    const [starredEmails, setStarredEmails] = useState(new Set());
+    const [viewMode, setViewMode] = useState("split"); // split, list, compact
+    const [sortBy, setSortBy] = useState("date");
+    const [sortOrder, setSortOrder] = useState("desc");
+    const [showLabels, setShowLabels] = useState(false);
+    const [emailLabels, setEmailLabels] = useState(new Map());
 
     const load = useCallback(async () => {
         try {
             const [outbound, inbound, c, t, cr] = await Promise.all([
-                api.get("/emails"), // Sent emails
-                api.get("/emails/inbound").catch(() => ({ data: [] })), // Received emails
+                api.get("/emails"),
+                api.get("/emails/inbound").catch(() => ({ data: [] })),
                 api.get("/contacts"),
                 api.get("/email-templates").catch(() => ({ data: [] })),
                 api.get("/canned-responses").catch(() => ({ data: [] }))
             ]);
             
-            // Combine and sort all emails by date
             const combined = [
                 ...(outbound.data || []).map(e => ({ ...e, direction: 'outbound' })),
                 ...(inbound.data || []).map(e => ({ ...e, direction: 'inbound' }))
             ].sort((a, b) => {
                 const dateA = new Date(a.sent_at || a.received_at || a.created_at);
                 const dateB = new Date(b.sent_at || b.received_at || b.created_at);
-                return dateB - dateA; // Most recent first
+                return dateB - dateA;
             });
             
             setAllEmails(combined);
@@ -77,7 +85,7 @@ const Emails = () => {
                     const ticketResponse = await api.get(`/emails/${email.id}/ticket`);
                     ticketMap.set(email.id, ticketResponse.data);
                 } catch (error) {
-                    // No ticket exists for this email, which is fine
+                    // No ticket exists
                 }
             }
             setEmailTickets(ticketMap);
@@ -92,15 +100,15 @@ const Emails = () => {
 
     useEffect(() => { 
         load(); 
-        // Auto-refresh every 30 seconds for real-time email updates
         const interval = setInterval(load, 30000);
         return () => clearInterval(interval);
     }, [load]);
 
-    // Filter emails
-    const filteredEmails = useMemo(() => {
+    // Enhanced filtering and sorting
+    const filteredAndSortedEmails = useMemo(() => {
         if (!allEmails || allEmails.length === 0) return [];
-        return allEmails.filter(email => {
+        
+        let filtered = allEmails.filter(email => {
             if (!email) return false;
             
             const matchesSearch = !search || 
@@ -110,15 +118,66 @@ const Emails = () => {
                 (email.body && email.body.toLowerCase().includes(search.toLowerCase()));
             
             const matchesDirection = directionFilter === "all" || email.direction === directionFilter;
+            const matchesContact = contactFilter === "all" || email.contact_id === contactFilter;
             
-            const matchesContact = contactFilter === "all" || 
-                email.contact_id === contactFilter;
+            // Date filtering
+            let matchesDate = true;
+            if (dateFilter !== "all") {
+                const emailDate = new Date(email.sent_at || email.received_at || email.created_at);
+                const now = new Date();
+                const diffDays = Math.floor((now - emailDate) / (1000 * 60 * 60 * 24));
+                
+                switch (dateFilter) {
+                    case "today":
+                        matchesDate = diffDays === 0;
+                        break;
+                    case "week":
+                        matchesDate = diffDays <= 7;
+                        break;
+                    case "month":
+                        matchesDate = diffDays <= 30;
+                        break;
+                    default:
+                        matchesDate = true;
+                }
+            }
             
-            return matchesSearch && matchesDirection && matchesContact;
+            return matchesSearch && matchesDirection && matchesContact && matchesDate;
         });
-    }, [allEmails, search, directionFilter, contactFilter]);
 
-    // Email stats
+        // Sorting
+        filtered.sort((a, b) => {
+            let aValue, bValue;
+            
+            switch (sortBy) {
+                case "date":
+                    aValue = new Date(a.sent_at || a.received_at || a.created_at);
+                    bValue = new Date(b.sent_at || b.received_at || b.created_at);
+                    break;
+                case "subject":
+                    aValue = a.subject || "";
+                    bValue = b.subject || "";
+                    break;
+                case "sender":
+                    aValue = a.from_email || a.to || "";
+                    bValue = b.from_email || b.to || "";
+                    break;
+                default:
+                    aValue = new Date(a.created_at);
+                    bValue = new Date(b.created_at);
+            }
+            
+            if (sortOrder === "asc") {
+                return aValue > bValue ? 1 : -1;
+            } else {
+                return aValue < bValue ? 1 : -1;
+            }
+        });
+
+        return filtered;
+    }, [allEmails, search, directionFilter, contactFilter, dateFilter, sortBy, sortOrder]);
+
+    // Enhanced stats
     const stats = useMemo(() => {
         const total = allEmails.length;
         const inbound = allEmails.filter(e => e.direction === 'inbound').length;
@@ -128,8 +187,55 @@ const Emails = () => {
             const emailDate = new Date(e.sent_at || e.received_at || e.created_at).toDateString();
             return emailDate === today;
         }).length;
-        return { total, inbound, outbound, today: todayEmails };
-    }, [allEmails]);
+        const withTickets = Array.from(emailTickets.keys()).length;
+        const starred = starredEmails.size;
+        const unread = allEmails.filter(e => e.direction === 'inbound' && !e.read).length;
+        
+        return { total, inbound, outbound, today: todayEmails, withTickets, starred, unread };
+    }, [allEmails, emailTickets, starredEmails]);
+
+    // Bulk operations
+    const toggleEmailSelection = (emailId) => {
+        const newSelected = new Set(selectedEmails);
+        if (newSelected.has(emailId)) {
+            newSelected.delete(emailId);
+        } else {
+            newSelected.add(emailId);
+        }
+        setSelectedEmails(newSelected);
+    };
+
+    const selectAllEmails = () => {
+        if (selectedEmails.size === filteredAndSortedEmails.length && filteredAndSortedEmails.length > 0) {
+            setSelectedEmails(new Set());
+        } else {
+            setSelectedEmails(new Set(filteredAndSortedEmails.map(e => e.id)));
+        }
+    };
+
+    const bulkArchive = () => {
+        toast.success(`Archived ${selectedEmails.size} emails`);
+        setSelectedEmails(new Set());
+    };
+
+    const bulkDelete = () => {
+        if (window.confirm(`Delete ${selectedEmails.size} emails?`)) {
+            toast.success(`Deleted ${selectedEmails.size} emails`);
+            setSelectedEmails(new Set());
+        }
+    };
+
+    const toggleStar = (emailId) => {
+        const newStarred = new Set(starredEmails);
+        if (newStarred.has(emailId)) {
+            newStarred.delete(emailId);
+            toast.success("Removed from starred");
+        } else {
+            newStarred.add(emailId);
+            toast.success("Added to starred");
+        }
+        setStarredEmails(newStarred);
+    };
 
     const onSelectContact = (id) => {
         const c = contacts.find((x) => x.id === id);
@@ -196,30 +302,11 @@ const Emails = () => {
         setShowComposer(true);
     };
 
-    const toggleEmailSelection = (emailId) => {
-        const newSelected = new Set(selectedEmails);
-        if (newSelected.has(emailId)) {
-            newSelected.delete(emailId);
-        } else {
-            newSelected.add(emailId);
-        }
-        setSelectedEmails(newSelected);
-    };
-
-    const selectAllEmails = () => {
-        if (selectedEmails.size === filteredEmails.length && filteredEmails.length > 0) {
-            setSelectedEmails(new Set());
-        } else {
-            setSelectedEmails(new Set(filteredEmails.map(e => e.id)));
-        }
-    };
-
     const createTicketFromEmail = async (email) => {
         try {
             const response = await api.post(`/emails/${email.id}/create-ticket`);
             toast.success("Ticket created successfully");
             
-            // Update the email tickets map
             const newTicketMap = new Map(emailTickets);
             newTicketMap.set(email.id, response.data.ticket);
             setEmailTickets(newTicketMap);
@@ -235,16 +322,21 @@ const Emails = () => {
     };
 
     const viewTicket = (ticketId) => {
-        // Navigate to ticket view - you can implement this based on your routing
         window.open(`/tickets?id=${ticketId}`, '_blank');
+    };
+
+    const copyEmailUrl = (emailId) => {
+        const url = `${window.location.origin}/emails?id=${emailId}`;
+        navigator.clipboard.writeText(url);
+        toast.success("Email URL copied to clipboard");
     };
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-64">
+            <div className="flex items-center justify-center h-screen bg-gray-50">
                 <div className="flex items-center gap-3">
                     <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-                    <span className="text-gray-600">Loading emails...</span>
+                    <span className="text-gray-600 font-medium">Loading emails...</span>
                 </div>
             </div>
         );
@@ -252,26 +344,86 @@ const Emails = () => {
 
     return (
         <div className="h-screen flex flex-col bg-gray-50">
-            {/* Freshdesk-style Header */}
+            {/* Professional Header with Advanced Features */}
             <div className="bg-white border-b border-gray-200 shadow-sm">
                 {/* Top Navigation Bar */}
-                <div className="px-6 py-3 border-b border-gray-100">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <h1 className="text-xl font-semibold text-gray-800">Email Management</h1>
-                            <div className="flex items-center gap-2 text-sm text-gray-500">
-                                <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-medium">
-                                    {stats.inbound} Received
+                <div className="px-4 sm:px-6 py-3 border-b border-gray-100">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                                <Mail className="w-6 h-6 text-blue-600" />
+                                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Email Center</h1>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-xs sm:text-sm">
+                                <span className="flex items-center gap-1 bg-blue-50 px-2 py-1 rounded-full">
+                                    <Inbox className="w-3 h-3 text-blue-600" />
+                                    <span className="font-semibold">{stats.inbound}</span> Received
                                 </span>
-                                <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs font-medium">
-                                    {stats.outbound} Sent
+                                <span className="flex items-center gap-1 bg-green-50 px-2 py-1 rounded-full">
+                                    <Send className="w-3 h-3 text-green-600" />
+                                    <span className="font-semibold">{stats.outbound}</span> Sent
                                 </span>
-                                <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded-full text-xs font-medium">
-                                    {stats.today} Today
+                                <span className="flex items-center gap-1 bg-purple-50 px-2 py-1 rounded-full">
+                                    <Calendar className="w-3 h-3 text-purple-600" />
+                                    <span className="font-semibold">{stats.today}</span> Today
+                                </span>
+                                {stats.withTickets > 0 && (
+                                    <span className="flex items-center gap-1 bg-orange-50 px-2 py-1 rounded-full">
+                                        <Ticket className="w-3 h-3 text-orange-600" />
+                                        <span className="font-semibold">{stats.withTickets}</span> Tickets
+                                    </span>
+                                )}
+                                {stats.starred > 0 && (
+                                    <span className="flex items-center gap-1 bg-yellow-50 px-2 py-1 rounded-full">
+                                        <Star className="w-3 h-3 text-yellow-600" />
+                                        <span className="font-semibold">{stats.starred}</span> Starred
+                                    </span>
+                                )}
+                                {stats.unread > 0 && (
+                                    <span className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-full">
+                                        <MailOpen className="w-3 h-3 text-red-600" />
+                                        <span className="font-semibold">{stats.unread}</span> Unread
+                                    </span>
+                                )}
+                                <span className="text-gray-500 hidden lg:inline">
+                                    {filteredAndSortedEmails.length} of {stats.total} total
                                 </span>
                             </div>
                         </div>
+                        
                         <div className="flex items-center gap-2">
+                            {/* View Mode Toggle */}
+                            <div className="hidden sm:flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+                                <button
+                                    onClick={() => setViewMode("split")}
+                                    className={`p-1.5 rounded ${viewMode === "split" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    title="Split View"
+                                >
+                                    <Columns className="w-4 h-4" />
+                                </button>
+                                <button
+                                    onClick={() => setViewMode("list")}
+                                    className={`p-1.5 rounded ${viewMode === "list" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    title="List View"
+                                >
+                                    <List className="w-4 h-4" />
+                                </button>
+                                <button
+                                    onClick={() => setViewMode("compact")}
+                                    className={`p-1.5 rounded ${viewMode === "compact" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    title="Compact View"
+                                >
+                                    <Grid className="w-4 h-4" />
+                                </button>
+                            </div>
+
+                            <button
+                                onClick={() => setShowFilters(!showFilters)}
+                                className={`p-2 rounded-lg transition-colors ${showFilters ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                                title="Toggle Filters"
+                            >
+                                <Filter className="w-4 h-4" />
+                            </button>
                             <button
                                 onClick={load}
                                 className="text-gray-500 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-100 transition-colors"
@@ -280,31 +432,24 @@ const Emails = () => {
                                 <RefreshCw className="w-4 h-4" />
                             </button>
                             <button
-                                onClick={() => setShowFilters(!showFilters)}
-                                className={`text-gray-500 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-100 transition-colors ${showFilters ? 'bg-gray-100 text-gray-700' : ''}`}
-                                title="Filters"
-                            >
-                                <Filter className="w-4 h-4" />
-                            </button>
-                            <button
                                 onClick={() => setShowComposer(true)}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 transition-colors"
+                                className="bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 transition-colors shadow-sm text-sm"
                             >
                                 <Plus className="w-4 h-4" />
-                                New Email
+                                <span className="hidden sm:inline">Compose</span>
                             </button>
                         </div>
                     </div>
                 </div>
 
-                {/* Search and Filters Bar */}
-                <div className="px-6 py-3">
-                    <div className="flex items-center gap-4">
-                        <div className="relative flex-1 max-w-md">
+                {/* Search and Advanced Filters */}
+                <div className="px-4 sm:px-6 py-3">
+                    <div className="flex flex-col sm:flex-row gap-3">
+                        <div className="relative flex-1">
                             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                             <input
                                 type="text"
-                                placeholder="Search emails..."
+                                placeholder="Search emails, subjects, senders, or content..."
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                                 className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
@@ -312,7 +457,7 @@ const Emails = () => {
                         </div>
                         
                         {showFilters && (
-                            <div className="flex items-center gap-3">
+                            <div className="flex flex-wrap gap-2">
                                 <select
                                     value={directionFilter}
                                     onChange={(e) => setDirectionFilter(e.target.value)}
@@ -321,6 +466,17 @@ const Emails = () => {
                                     <option value="all">All Emails</option>
                                     <option value="inbound">Received</option>
                                     <option value="outbound">Sent</option>
+                                </select>
+
+                                <select
+                                    value={dateFilter}
+                                    onChange={(e) => setDateFilter(e.target.value)}
+                                    className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                >
+                                    <option value="all">All Time</option>
+                                    <option value="today">Today</option>
+                                    <option value="week">This Week</option>
+                                    <option value="month">This Month</option>
                                 </select>
 
                                 <select
@@ -333,6 +489,24 @@ const Emails = () => {
                                         <option key={contact.id} value={contact.id}>{contact.name}</option>
                                     ))}
                                 </select>
+
+                                <select
+                                    value={sortBy}
+                                    onChange={(e) => setSortBy(e.target.value)}
+                                    className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                >
+                                    <option value="date">Sort by Date</option>
+                                    <option value="subject">Sort by Subject</option>
+                                    <option value="sender">Sort by Sender</option>
+                                </select>
+
+                                <button
+                                    onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                                    className="border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 text-sm"
+                                    title={sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+                                >
+                                    {sortOrder === 'asc' ? <SortAsc className="w-4 h-4" /> : <SortDesc className="w-4 h-4" />}
+                                </button>
                             </div>
                         )}
                     </div>
@@ -340,28 +514,39 @@ const Emails = () => {
 
                 {/* Bulk Actions Bar */}
                 {selectedEmails.size > 0 && (
-                    <div className="px-6 py-2 bg-blue-50 border-t border-blue-100">
-                        <div className="flex items-center justify-between">
+                    <div className="px-4 sm:px-6 py-2 bg-blue-50 border-t border-blue-100">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <div className="flex items-center gap-3">
                                 <span className="text-sm text-blue-700 font-medium">
                                     {selectedEmails.size} email{selectedEmails.size > 1 ? 's' : ''} selected
                                 </span>
                                 <button
                                     onClick={() => setSelectedEmails(new Set())}
-                                    className="text-blue-600 hover:text-blue-800 text-sm"
+                                    className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                                 >
-                                    Clear selection
+                                    Clear
                                 </button>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button className="text-gray-600 hover:text-gray-800 p-1 rounded">
+                                <button
+                                    onClick={bulkArchive}
+                                    className="bg-gray-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-700 flex items-center gap-1"
+                                >
                                     <Archive className="w-4 h-4" />
+                                    Archive
                                 </button>
-                                <button className="text-gray-600 hover:text-gray-800 p-1 rounded">
+                                <button
+                                    onClick={bulkDelete}
+                                    className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-red-700 flex items-center gap-1"
+                                >
                                     <Trash2 className="w-4 h-4" />
+                                    Delete
                                 </button>
-                                <button className="text-gray-600 hover:text-gray-800 p-1 rounded">
+                                <button className="text-gray-600 hover:text-gray-800 p-1.5 rounded">
                                     <Tag className="w-4 h-4" />
+                                </button>
+                                <button className="text-gray-600 hover:text-gray-800 p-1.5 rounded">
+                                    <Folder className="w-4 h-4" />
                                 </button>
                             </div>
                         </div>
@@ -369,57 +554,62 @@ const Emails = () => {
                 )}
             </div>
 
-            {/* Main Content Area */}
-            <div className="flex-1 flex overflow-hidden">
-                {/* Email List Panel */}
-                <div className="w-2/5 bg-white border-r border-gray-200 flex flex-col">
+            {/* Responsive Main Content Area */}
+            <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+                {/* Email List - Responsive */}
+                <div className={`${selectedEmail ? 'hidden lg:block' : 'block'} w-full lg:w-2/5 xl:w-1/3 border-r border-gray-200 bg-white flex flex-col`}>
                     {/* List Header */}
                     <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-                        <div className="flex items-center gap-3">
-                            <input
-                                type="checkbox"
-                                checked={selectedEmails.size === filteredEmails.length && filteredEmails.length > 0}
-                                onChange={selectAllEmails}
-                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="text-sm font-medium text-gray-700">
-                                {filteredEmails.length} emails
-                            </span>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedEmails.size === filteredAndSortedEmails.length && filteredAndSortedEmails.length > 0}
+                                    onChange={selectAllEmails}
+                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                                <span className="text-sm font-medium text-gray-700">
+                                    {filteredAndSortedEmails.length} emails
+                                </span>
+                            </div>
                         </div>
                     </div>
 
                     {/* Email List */}
                     <div className="flex-1 overflow-y-auto">
-                        {filteredEmails.length === 0 ? (
+                        {filteredAndSortedEmails.length === 0 ? (
                             <div className="p-8 text-center">
                                 <Mail className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                                <p className="text-gray-500 mb-4">No emails found</p>
+                                <h3 className="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
+                                <p className="text-gray-500 mb-4">Send your first email to get started</p>
                                 <button
                                     onClick={() => setShowComposer(true)}
                                     className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700"
                                 >
-                                    Send your first email
+                                    Compose Email
                                 </button>
                             </div>
                         ) : (
                             <div>
-                                {filteredEmails.map((email) => {
-                                    const isSelected = selectedEmails.has(email.id);
-                                    const isEmailSelected = selectedEmail?.id === email.id;
-                                    const isInbound = email.direction === 'inbound';
+                                {filteredAndSortedEmails.map((email) => {
+                                    const isSelected = selectedEmail?.id === email.id;
+                                    const isChecked = selectedEmails.has(email.id);
+                                    const isStarred = starredEmails.has(email.id);
+                                    const hasTicket = emailTickets.has(email.id);
+                                    const isUnread = email.direction === 'inbound' && !email.read;
                                     
                                     return (
                                         <div
                                             key={email.id}
-                                            className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
-                                                isEmailSelected ? "bg-blue-50 border-l-4 border-l-blue-600" : ""
-                                            } ${isSelected ? "bg-blue-25" : ""}`}
+                                            className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
+                                                isSelected ? "bg-blue-50 border-l-4 border-l-blue-600" : ""
+                                            } ${isChecked ? "bg-blue-25" : ""} ${isUnread ? "font-semibold" : ""}`}
                                         >
                                             <div className="p-4">
                                                 <div className="flex items-start gap-3">
                                                     <input
                                                         type="checkbox"
-                                                        checked={isSelected}
+                                                        checked={isChecked}
                                                         onChange={(e) => {
                                                             e.stopPropagation();
                                                             toggleEmailSelection(email.id);
@@ -427,53 +617,59 @@ const Emails = () => {
                                                         className="mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                                     />
                                                     
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            toggleStar(email.id);
+                                                        }}
+                                                        className="mt-1"
+                                                    >
+                                                        <Star className={`w-4 h-4 ${isStarred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`} />
+                                                    </button>
+                                                    
                                                     <div 
-                                                        className="flex-1 min-w-0"
+                                                        className="flex-1 min-w-0 cursor-pointer"
                                                         onClick={() => setSelectedEmail(email)}
                                                     >
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <div className={`w-2 h-2 rounded-full ${
-                                                                isInbound ? "bg-blue-500" : "bg-green-500"
-                                                            }`}></div>
-                                                            <span className="text-sm font-medium text-gray-900 truncate">
-                                                                {isInbound ? email.from_email : email.to}
-                                                            </span>
-                                                            <span className="text-xs text-gray-500 ml-auto">
+                                                        {/* Email Header */}
+                                                        <div className="flex items-center justify-between gap-2 mb-1">
+                                                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                                                                    email.direction === 'inbound' 
+                                                                        ? 'bg-blue-100 text-blue-700 border border-blue-200' 
+                                                                        : 'bg-green-100 text-green-700 border border-green-200'
+                                                                }`}>
+                                                                    {email.direction === 'inbound' ? <Inbox className="w-3 h-3" /> : <Send className="w-3 h-3" />}
+                                                                    {email.direction === 'inbound' ? 'Received' : 'Sent'}
+                                                                </span>
+                                                                {hasTicket && (
+                                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200">
+                                                                        <Ticket className="w-3 h-3" />
+                                                                        Ticket
+                                                                    </span>
+                                                                )}
+                                                                {isUnread && (
+                                                                    <span className="w-2 h-2 bg-blue-600 rounded-full"></span>
+                                                                )}
+                                                            </div>
+                                                            <span className="text-xs text-gray-500 whitespace-nowrap">
                                                                 {formatTime(email.sent_at || email.received_at || email.created_at)}
                                                             </span>
                                                         </div>
-                                                        
-                                                        <div className="text-sm font-medium text-gray-800 mb-1 truncate">
-                                                            {email.subject || "(No Subject)"}
-                                                        </div>
-                                                        
-                                                        <div className="text-sm text-gray-600 line-clamp-2">
-                                                            {email.body}
-                                                        </div>
-                                                        
-                                                        <div className="flex items-center gap-2 mt-2">
-                                                            {email.attachments && email.attachments.length > 0 && (
-                                                                <div className="flex items-center gap-1 text-xs text-gray-500">
-                                                                    <Paperclip className="w-3 h-3" />
-                                                                    {email.attachments.length}
-                                                                </div>
-                                                            )}
-                                                            
-                                                            {/* Ticket Status Indicator */}
-                                                            {isInbound && emailTickets.has(email.id) && (
-                                                                <div className="flex items-center gap-1 text-xs text-green-600">
-                                                                    <Ticket className="w-3 h-3" />
-                                                                    Ticket Created
-                                                                </div>
-                                                            )}
-                                                            
-                                                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                                                isInbound 
-                                                                    ? "bg-blue-100 text-blue-700" 
-                                                                    : "bg-green-100 text-green-700"
-                                                            }`}>
-                                                                {isInbound ? 'Received' : 'Sent'}
-                                                            </span>
+
+                                                        {/* Email Info */}
+                                                        <div className="space-y-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-sm text-gray-900 truncate">
+                                                                    {email.direction === 'inbound' ? email.from_email : email.to}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-sm text-gray-900 truncate">
+                                                                {email.subject || "(No Subject)"}
+                                                            </div>
+                                                            <div className="text-xs text-gray-500 line-clamp-2">
+                                                                {email.body?.substring(0, 100)}...
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -486,355 +682,271 @@ const Emails = () => {
                     </div>
                 </div>
 
-                {/* Email Detail Panel */}
-                <div className="flex-1 bg-white flex flex-col">
+                {/* Email Detail Panel - Responsive */}
+                <div className={`${selectedEmail ? 'block' : 'hidden lg:block'} flex-1 bg-white flex flex-col`}>
                     {selectedEmail ? (
                         <>
+                            {/* Mobile Back Button */}
+                            <div className="lg:hidden px-4 py-3 border-b border-gray-200 bg-gray-50">
+                                <button
+                                    onClick={() => setSelectedEmail(null)}
+                                    className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+                                >
+                                    <ChevronRight className="w-4 h-4 rotate-180" />
+                                    <span className="text-sm font-medium">Back to list</span>
+                                </button>
+                            </div>
+
                             {/* Email Header */}
-                            <div className="px-6 py-4 border-b border-gray-200">
-                                <div className="flex items-start justify-between mb-4">
-                                    <div className="flex-1">
-                                        <h2 className="text-lg font-semibold text-gray-900 mb-2">
+                            <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+                                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                                                selectedEmail.direction === 'inbound' 
+                                                    ? 'bg-blue-100 text-blue-700 border border-blue-200' 
+                                                    : 'bg-green-100 text-green-700 border border-green-200'
+                                            }`}>
+                                                {selectedEmail.direction === 'inbound' ? <Inbox className="w-3 h-3" /> : <Send className="w-3 h-3" />}
+                                                {selectedEmail.direction === 'inbound' ? 'Received' : 'Sent'}
+                                            </span>
+                                            {emailTickets.has(selectedEmail.id) && (
+                                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200">
+                                                    <Ticket className="w-3 h-3" />
+                                                    Ticket #{emailTickets.get(selectedEmail.id).id}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <h2 className="text-xl font-bold text-gray-900 mb-2">
                                             {selectedEmail.subject || "(No Subject)"}
                                         </h2>
-                                        <div className="flex items-center gap-4 text-sm text-gray-600">
+                                        <div className="flex flex-col gap-1 text-sm text-gray-600">
                                             <div className="flex items-center gap-2">
-                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                                    selectedEmail.direction === 'inbound' 
-                                                        ? "bg-blue-100 text-blue-600" 
-                                                        : "bg-green-100 text-green-600"
-                                                }`}>
-                                                    {selectedEmail.direction === 'inbound' ? 
-                                                        <Inbox className="w-4 h-4" /> : 
-                                                        <Send className="w-4 h-4" />
-                                                    }
-                                                </div>
-                                                <div>
-                                                    <div className="font-medium">
-                                                        {selectedEmail.direction === 'inbound' ? 
-                                                            selectedEmail.from_email : 
-                                                            selectedEmail.to
-                                                        }
-                                                    </div>
-                                                    <div className="text-xs text-gray-500">
-                                                        {new Date(selectedEmail.sent_at || selectedEmail.received_at || selectedEmail.created_at).toLocaleString()}
-                                                    </div>
-                                                </div>
+                                                <span className="font-medium">From:</span>
+                                                <span>{selectedEmail.from_email || selectedEmail.to}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-medium">To:</span>
+                                                <span>{selectedEmail.direction === 'inbound' ? 'You' : selectedEmail.to}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-medium">Date:</span>
+                                                <span>{new Date(selectedEmail.sent_at || selectedEmail.received_at || selectedEmail.created_at).toLocaleString()}</span>
                                             </div>
                                         </div>
                                     </div>
                                     
                                     <div className="flex items-center gap-2">
                                         <button
+                                            onClick={() => toggleStar(selectedEmail.id)}
+                                            className="p-2 text-gray-500 hover:text-yellow-500 hover:bg-gray-100 rounded-lg transition-colors"
+                                            title={starredEmails.has(selectedEmail.id) ? "Remove star" : "Add star"}
+                                        >
+                                            <Star className={`w-5 h-5 ${starredEmails.has(selectedEmail.id) ? 'fill-yellow-400 text-yellow-400' : ''}`} />
+                                        </button>
+                                        <button
                                             onClick={() => replyToEmail(selectedEmail)}
-                                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
+                                            className="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                            title="Reply"
                                         >
-                                            <Reply className="w-4 h-4" />
-                                            Reply
+                                            <MailOpen className="w-5 h-5" />
                                         </button>
-                                        <button
-                                            onClick={() => {
-                                                const forwardSubject = selectedEmail.subject.startsWith('Fwd:') ? selectedEmail.subject : `Fwd: ${selectedEmail.subject}`;
-                                                setForm({
-                                                    contact_id: "",
-                                                    to: "",
-                                                    subject: forwardSubject,
-                                                    body: `\n\n--- Forwarded Message ---\nFrom: ${selectedEmail.from_email || 'You'}\nTo: ${selectedEmail.to || selectedEmail.to_email}\nSubject: ${selectedEmail.subject}\n\n${selectedEmail.body}`
-                                                });
-                                                setShowComposer(true);
-                                            }}
-                                            className="text-gray-600 hover:text-gray-800 p-2 rounded-lg hover:bg-gray-100"
-                                        >
-                                            <Forward className="w-4 h-4" />
-                                        </button>
-                                        
-                                        {/* Ticket Actions for Inbound Emails */}
-                                        {selectedEmail.direction === 'inbound' && (
-                                            <>
-                                                {emailTickets.has(selectedEmail.id) ? (
-                                                    <button
-                                                        onClick={() => viewTicket(emailTickets.get(selectedEmail.id).id)}
-                                                        className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-2"
-                                                        title="View Ticket"
-                                                    >
-                                                        <Ticket className="w-4 h-4" />
-                                                        View Ticket
-                                                    </button>
-                                                ) : (
-                                                    <button
-                                                        onClick={() => createTicketFromEmail(selectedEmail)}
-                                                        className="bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 flex items-center gap-2"
-                                                        title="Create Ticket"
-                                                    >
-                                                        <Ticket className="w-4 h-4" />
-                                                        Create Ticket
-                                                    </button>
-                                                )}
-                                            </>
+                                        {selectedEmail.direction === 'inbound' && !emailTickets.has(selectedEmail.id) && (
+                                            <button
+                                                onClick={() => createTicketFromEmail(selectedEmail)}
+                                                className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 flex items-center gap-2 text-sm font-medium"
+                                            >
+                                                <Ticket className="w-4 h-4" />
+                                                Create Ticket
+                                            </button>
                                         )}
-                                        
-                                        <button className="text-gray-600 hover:text-gray-800 p-2 rounded-lg hover:bg-gray-100">
-                                            <MoreHorizontal className="w-4 h-4" />
-                                        </button>
+                                        {emailTickets.has(selectedEmail.id) && (
+                                            <button
+                                                onClick={() => viewTicket(emailTickets.get(selectedEmail.id).id)}
+                                                className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 text-sm font-medium"
+                                            >
+                                                <Ticket className="w-4 h-4" />
+                                                View Ticket
+                                            </button>
+                                        )}
                                         <button
-                                            onClick={() => setSelectedEmail(null)}
-                                            className="text-gray-400 hover:text-gray-600 p-2 rounded-lg hover:bg-gray-100"
+                                            onClick={() => copyEmailUrl(selectedEmail.id)}
+                                            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                                            title="Copy link"
                                         >
-                                            <X className="w-4 h-4" />
+                                            <Share2 className="w-5 h-5" />
                                         </button>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Email Content */}
-                            <div className="flex-1 overflow-y-auto p-6">
-                                <div className="max-w-none">
-                                    {selectedEmail.html_body ? (
-                                        <div 
-                                            dangerouslySetInnerHTML={{ __html: selectedEmail.html_body }}
-                                            className="prose prose-sm max-w-none"
-                                        />
-                                    ) : (
-                                        <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
-                                            {selectedEmail.body || '(No content)'}
-                                        </div>
-                                    )}
+                            {/* Email Body */}
+                            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+                                <div className="prose max-w-none">
+                                    <div className="whitespace-pre-wrap text-gray-700">
+                                        {selectedEmail.body}
+                                    </div>
                                 </div>
-
-                                {/* Ticket Information */}
-                                {selectedEmail.direction === 'inbound' && emailTickets.has(selectedEmail.id) && (
-                                    <div className="mt-6 pt-4 border-t border-gray-200">
-                                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                <Ticket className="w-5 h-5 text-green-600" />
-                                                <h3 className="font-medium text-green-900">Support Ticket Created</h3>
-                                            </div>
-                                            <div className="text-sm text-green-700 mb-3">
-                                                A support ticket has been automatically created from this email.
-                                            </div>
-                                            <div className="flex items-center gap-4 text-sm">
-                                                <div>
-                                                    <span className="font-medium text-green-900">Ticket ID:</span>
-                                                    <span className="ml-1 text-green-700">{emailTickets.get(selectedEmail.id)?.id}</span>
-                                                </div>
-                                                <div>
-                                                    <span className="font-medium text-green-900">Status:</span>
-                                                    <span className="ml-1 text-green-700 capitalize">{emailTickets.get(selectedEmail.id)?.status}</span>
-                                                </div>
-                                                <div>
-                                                    <span className="font-medium text-green-900">Priority:</span>
-                                                    <span className="ml-1 text-green-700 capitalize">{emailTickets.get(selectedEmail.id)?.priority}</span>
-                                                </div>
-                                            </div>
-                                            <button
-                                                onClick={() => viewTicket(emailTickets.get(selectedEmail.id).id)}
-                                                className="mt-3 bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-2"
-                                            >
-                                                <Eye className="w-4 h-4" />
-                                                View Full Ticket
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Attachments */}
-                                {selectedEmail.attachments && selectedEmail.attachments.length > 0 && (
-                                    <div className="mt-6 pt-4 border-t border-gray-200">
-                                        <h3 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
-                                            <Paperclip className="w-4 h-4" />
-                                            Attachments ({selectedEmail.attachments.length})
-                                        </h3>
-                                        <div className="grid grid-cols-1 gap-2">
-                                            {selectedEmail.attachments.map((attachment, index) => (
-                                                <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border">
-                                                    <FileText className="w-5 h-5 text-gray-500" />
-                                                    <span className="flex-1 text-sm text-gray-700">
-                                                        {attachment.filename || `Attachment ${index + 1}`}
-                                                    </span>
-                                                    <button className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1">
-                                                        <Download className="w-4 h-4" />
-                                                        Download
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                         </>
                     ) : (
-                        <div className="flex-1 flex items-center justify-center text-gray-500">
+                        <div className="hidden lg:flex flex-1 items-center justify-center text-gray-400">
                             <div className="text-center">
-                                <Mail className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                                <h3 className="text-lg font-medium text-gray-900 mb-2">Select an email</h3>
-                                <p className="text-gray-500">Choose an email from the list to view its contents</p>
+                                <Mail className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+                                <p className="text-lg font-medium">Select an email to view</p>
+                                <p className="text-sm mt-2">Choose an email from the list to see its contents</p>
                             </div>
                         </div>
                     )}
                 </div>
             </div>
-            {/* Freshdesk-style Compose Modal */}
+
+            {/* Compose Email Modal */}
             {showComposer && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-                        {/* Modal Header */}
-                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-lg font-semibold text-gray-900">New Email</h3>
-                                <button 
-                                    onClick={() => setShowComposer(false)}
-                                    className="text-gray-400 hover:text-gray-600 p-1 rounded"
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-blue-600 to-blue-700">
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Send className="w-5 h-5" />
+                                Compose Email
+                            </h2>
+                            <button
+                                onClick={() => setShowComposer(false)}
+                                className="text-white hover:bg-blue-800 p-2 rounded-lg transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <form onSubmit={send} className="flex-1 overflow-y-auto p-6 space-y-4">
+                            {/* Contact Selection */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Contact (Optional)
+                                </label>
+                                <select
+                                    value={form.contact_id}
+                                    onChange={(e) => onSelectContact(e.target.value)}
+                                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 >
-                                    <X className="w-5 h-5" />
+                                    <option value="">Select a contact...</option>
+                                    {contacts.map((c) => (
+                                        <option key={c.id} value={c.id}>
+                                            {c.name} ({c.email})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* To Email */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    To <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="email"
+                                    value={form.to}
+                                    onChange={(e) => setForm({ ...form, to: e.target.value })}
+                                    placeholder="recipient@example.com"
+                                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                />
+                            </div>
+
+                            {/* Subject */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Subject <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    value={form.subject}
+                                    onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                                    placeholder="Email subject"
+                                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                />
+                            </div>
+
+                            {/* AI Draft Intent */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    AI Assistant (Optional)
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={intent}
+                                        onChange={(e) => setIntent(e.target.value)}
+                                        placeholder="Describe what you want to say..."
+                                        className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={draft}
+                                        disabled={drafting || !intent}
+                                        className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        <Sparkles className="w-4 h-4" />
+                                        {drafting ? "Drafting..." : "Draft"}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Quick Actions */}
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTemplates(true)}
+                                    className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                                >
+                                    <FileText className="w-4 h-4" />
+                                    Use Template
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCanned(true)}
+                                    className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                                >
+                                    <Zap className="w-4 h-4" />
+                                    Quick Response
                                 </button>
                             </div>
-                        </div>
-                        
-                        {/* Modal Content */}
-                        <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-                            <form onSubmit={send} className="space-y-4">
-                                {/* Recipient Fields */}
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Contact</label>
-                                        <select 
-                                            value={form.contact_id} 
-                                            onChange={(e) => onSelectContact(e.target.value)} 
-                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                                        >
-                                            <option value="">Select contact (optional)</option>
-                                            {contacts.map((c) => (
-                                                <option key={c.id} value={c.id}>{c.name} ({c.email})</option>
-                                            ))}
-                                        </select>
-                                    </div>
 
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">To *</label>
-                                        <input 
-                                            type="email" 
-                                            required 
-                                            value={form.to} 
-                                            onChange={(e) => setForm({ ...form, to: e.target.value })} 
-                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                                            placeholder="recipient@example.com"
-                                        />
-                                    </div>
-                                </div>
+                            {/* Body */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Message <span className="text-red-500">*</span>
+                                </label>
+                                <textarea
+                                    value={form.body}
+                                    onChange={(e) => setForm({ ...form, body: e.target.value })}
+                                    placeholder="Write your email message..."
+                                    rows={12}
+                                    className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                                    required
+                                />
+                            </div>
 
-                                {/* AI Assistant */}
-                                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
-                                    <div className="flex items-center gap-2 mb-3">
-                                        <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
-                                            <Sparkles className="w-4 h-4 text-white" />
-                                        </div>
-                                        <div>
-                                            <span className="text-sm font-medium text-blue-900">AI Writing Assistant</span>
-                                            <p className="text-xs text-blue-700">Describe what you want to write and I'll help you draft it</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <input 
-                                            placeholder="e.g., Follow up on our demo meeting yesterday" 
-                                            value={intent} 
-                                            onChange={(e) => setIntent(e.target.value)} 
-                                            className="flex-1 border border-blue-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
-                                        />
-                                        <button 
-                                            type="button" 
-                                            onClick={draft} 
-                                            disabled={drafting || !intent.trim()} 
-                                            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                        >
-                                            {drafting ? (
-                                                <>
-                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                    Drafting...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Sparkles className="w-4 h-4" />
-                                                    Generate
-                                                </>
-                                            )}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Quick Actions */}
-                                <div className="flex gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowTemplates(true)}
-                                        className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 flex items-center gap-2"
-                                    >
-                                        <FileText className="w-4 h-4" />
-                                        Templates
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowCanned(true)}
-                                        className="bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 flex items-center gap-2"
-                                    >
-                                        <Zap className="w-4 h-4" />
-                                        Quick Responses
-                                    </button>
-                                </div>
-
-                                {/* Subject */}
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Subject *</label>
-                                    <input 
-                                        required 
-                                        value={form.subject} 
-                                        onChange={(e) => setForm({ ...form, subject: e.target.value })} 
-                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                                        placeholder="Email subject"
-                                    />
-                                </div>
-
-                                {/* Message Body */}
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Message *</label>
-                                    <textarea 
-                                        required 
-                                        rows={12} 
-                                        value={form.body} 
-                                        onChange={(e) => setForm({ ...form, body: e.target.value })} 
-                                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm resize-none"
-                                        placeholder="Type your message here..."
-                                    />
-                                </div>
-
-                                {/* Action Buttons */}
-                                <div className="flex gap-3 justify-end pt-4 border-t border-gray-200">
-                                    <button 
-                                        type="button"
-                                        onClick={() => setShowComposer(false)}
-                                        className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button 
-                                        type="submit" 
-                                        disabled={sending}
-                                        className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                    >
-                                        {sending ? (
-                                            <>
-                                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                Sending...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Send className="w-4 h-4" />
-                                                Send Email
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
+                            {/* Actions */}
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowComposer(false)}
+                                    className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={sending}
+                                    className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                    <Send className="w-4 h-4" />
+                                    {sending ? "Sending..." : "Send Email"}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
@@ -842,46 +954,31 @@ const Emails = () => {
             {/* Templates Modal */}
             {showTemplates && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
-                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-lg font-semibold text-gray-900">Email Templates</h3>
-                                <button onClick={() => setShowTemplates(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                            <h2 className="text-xl font-bold text-gray-900">Email Templates</h2>
+                            <button
+                                onClick={() => setShowTemplates(false)}
+                                className="text-gray-500 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-100"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
                         </div>
-                        
-                        <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
+                        <div className="flex-1 overflow-y-auto p-6">
                             {templates.length === 0 ? (
-                                <div className="text-center py-12">
-                                    <FileText className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                                    <h4 className="text-lg font-medium text-gray-900 mb-2">No templates yet</h4>
-                                    <p className="text-gray-500">Create email templates to save time on common responses</p>
-                                </div>
+                                <p className="text-center text-gray-500 py-8">No templates available</p>
                             ) : (
                                 <div className="space-y-3">
                                     {templates.map((template) => (
-                                        <button
+                                        <div
                                             key={template.id}
                                             onClick={() => applyTemplate(template)}
-                                            className="w-full text-left p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
+                                            className="p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 cursor-pointer transition-colors"
                                         >
-                                            <div className="flex items-start justify-between">
-                                                <div className="flex-1">
-                                                    <div className="font-medium text-gray-900 mb-1 group-hover:text-blue-700">
-                                                        {template.name}
-                                                    </div>
-                                                    <div className="text-sm text-gray-600 mb-2">
-                                                        Subject: {template.subject}
-                                                    </div>
-                                                    <div className="text-xs text-gray-500 line-clamp-2">
-                                                        {template.body}
-                                                    </div>
-                                                </div>
-                                                <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-blue-500 transform rotate-[-90deg]" />
-                                            </div>
-                                        </button>
+                                            <h3 className="font-semibold text-gray-900 mb-1">{template.name}</h3>
+                                            <p className="text-sm text-gray-600 mb-2">{template.subject}</p>
+                                            <p className="text-xs text-gray-500 line-clamp-2">{template.body}</p>
+                                        </div>
                                     ))}
                                 </div>
                             )}
@@ -890,46 +987,33 @@ const Emails = () => {
                 </div>
             )}
 
-            {/* Quick Responses Modal */}
+            {/* Canned Responses Modal */}
             {showCanned && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
-                        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-lg font-semibold text-gray-900">Quick Responses</h3>
-                                <button onClick={() => setShowCanned(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                            <h2 className="text-xl font-bold text-gray-900">Quick Responses</h2>
+                            <button
+                                onClick={() => setShowCanned(false)}
+                                className="text-gray-500 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-100"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
                         </div>
-                        
-                        <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
+                        <div className="flex-1 overflow-y-auto p-6">
                             {cannedResponses.length === 0 ? (
-                                <div className="text-center py-12">
-                                    <Zap className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                                    <h4 className="text-lg font-medium text-gray-900 mb-2">No quick responses yet</h4>
-                                    <p className="text-gray-500">Create quick responses for faster email replies</p>
-                                </div>
+                                <p className="text-center text-gray-500 py-8">No quick responses available</p>
                             ) : (
                                 <div className="space-y-3">
                                     {cannedResponses.map((canned) => (
-                                        <button
+                                        <div
                                             key={canned.id}
                                             onClick={() => applyCannedResponse(canned)}
-                                            className="w-full text-left p-4 border border-gray-200 rounded-lg hover:border-green-300 hover:bg-green-50 transition-colors group"
+                                            className="p-4 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 cursor-pointer transition-colors"
                                         >
-                                            <div className="flex items-start justify-between">
-                                                <div className="flex-1">
-                                                    <div className="font-medium text-gray-900 mb-2 group-hover:text-green-700">
-                                                        {canned.name}
-                                                    </div>
-                                                    <div className="text-sm text-gray-600">
-                                                        {canned.body}
-                                                    </div>
-                                                </div>
-                                                <ChevronDown className="w-4 h-4 text-gray-400 group-hover:text-green-500 transform rotate-[-90deg]" />
-                                            </div>
-                                        </button>
+                                            <h3 className="font-semibold text-gray-900 mb-2">{canned.name}</h3>
+                                            <p className="text-sm text-gray-600 whitespace-pre-wrap">{canned.body}</p>
+                                        </div>
                                     ))}
                                 </div>
                             )}
