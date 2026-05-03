@@ -2441,35 +2441,63 @@ async def resend_email_webhook_with_user(owner_id: str, request: Request):
         # Get the raw payload from Resend
         payload = await request.json()
         
-        print(f"Resend webhook received for user {owner_id}: {payload}")
+        print(f"Resend webhook received for user {owner_id}")
+        print(f"Full payload: {json.dumps(payload, indent=2)}")
         
-        # Resend sends data in a specific format
-        # Extract email data from Resend's payload structure
-        data = payload.get('data', payload)  # Sometimes wrapped in 'data'
+        # Resend sends email.received events with this structure:
+        # {
+        #   "type": "email.received",
+        #   "created_at": "2026-02-22T23:41:12.126Z",
+        #   "data": {
+        #     "email_id": "...",
+        #     "from": "sender@example.com",
+        #     "to": ["recipient@example.com"],
+        #     "subject": "...",
+        #     "html": "...",
+        #     "text": "...",
+        #     "attachments": []
+        #   }
+        # }
         
-        # Map Resend fields to our EmailWebhookIn format
-        from_email = data.get('from', data.get('from_email', ''))
-        to_email = data.get('to', data.get('to_email', ''))
+        # Extract the data object
+        data = payload.get('data', {})
         
-        # Handle 'to' field which might be an array
-        if isinstance(to_email, list):
-            to_email = to_email[0] if to_email else ''
+        if not data:
+            print("No data field in payload, using payload directly")
+            data = payload
         
-        # Handle 'from' field which might be an object
-        if isinstance(from_email, dict):
-            from_email = from_email.get('email', from_email.get('address', ''))
+        # Extract email fields from Resend's format
+        from_email = data.get('from', '')
+        to_emails = data.get('to', [])
         
-        email_payload = EmailWebhookIn(
-            from_email=from_email,
-            to_email=to_email,
-            subject=data.get('subject', ''),
-            body=data.get('text', data.get('body', '')),
-            html_body=data.get('html', data.get('html_body', '')),
-            message_id=data.get('message_id', data.get('id', '')),
-            timestamp=data.get('created_at', data.get('timestamp', ''))
-        )
+        # Handle 'to' field which is an array
+        if isinstance(to_emails, list) and len(to_emails) > 0:
+            to_email = to_emails[0]
+        elif isinstance(to_emails, str):
+            to_email = to_emails
+        else:
+            to_email = ''
         
-        print(f"Processed email payload for user {owner_id}: from={email_payload.from_email}, to={email_payload.to_email}, subject={email_payload.subject}")
+        # Handle 'from' field which might be formatted as "Name <email>"
+        if '<' in from_email and '>' in from_email:
+            # Extract email from "Name <email@example.com>" format
+            import re
+            match = re.search(r'<(.+?)>', from_email)
+            if match:
+                from_email = match.group(1)
+        
+        subject = data.get('subject', '')
+        body_text = data.get('text', '')
+        body_html = data.get('html', '')
+        message_id = data.get('message_id', data.get('email_id', ''))
+        created_at = data.get('created_at', payload.get('created_at', ''))
+        attachments = data.get('attachments', [])
+        
+        print(f"Processed email: from={from_email}, to={to_email}, subject={subject}")
+        
+        if not from_email or not to_email:
+            print(f"Missing required fields: from={from_email}, to={to_email}")
+            raise HTTPException(400, "Missing required email fields (from/to)")
         
         # Find the specific user by ID
         user = await db.users.find_one({"id": owner_id}, {"_id": 0})
@@ -2478,57 +2506,61 @@ async def resend_email_webhook_with_user(owner_id: str, request: Request):
             print(f"User not found: {owner_id}")
             raise HTTPException(404, f"User not found: {owner_id}")
         
+        print(f"Found user: {user.get('email', user.get('id'))}")
+        
         # Create email record directly for this user
         email_id = str(uuid.uuid4())
-        sender_name = email_payload.from_email.split('@')[0].replace('.', ' ').title()
+        sender_name = from_email.split('@')[0].replace('.', ' ').title()
         
         email_doc = {
             "id": email_id,
             "owner_id": user["id"],
-            "from_email": email_payload.from_email,
-            "to_email": email_payload.to_email,
-            "subject": email_payload.subject,
-            "body": email_payload.body,
-            "html_body": email_payload.html_body,
+            "from_email": from_email,
+            "to": to_email,
+            "subject": subject,
+            "body": body_text,
+            "html_body": body_html,
             "direction": "inbound",
-            "message_id": email_payload.message_id,
-            "received_at": email_payload.timestamp or now_utc_iso(),
+            "message_id": message_id,
+            "received_at": created_at or now_utc_iso(),
             "created_at": now_utc_iso(),
-            "attachments": email_payload.attachments or []
+            "attachments": attachments,
+            "read": False
         }
         
         await db.emails.insert_one(email_doc)
-        print(f"Email saved: {email_id}")
+        print(f"✅ Email saved: {email_id}")
         
         # Try to create/update contact from sender
         try:
-            contact_doc = {
-                "id": str(uuid.uuid4()),
-                "owner_id": user["id"],
-                "name": sender_name,
-                "email": email_payload.from_email,
-                "source": "email",
-                "tags": ["email-contact"],
-                "created_at": now_utc_iso(),
-                "updated_at": now_utc_iso()
-            }
-            
-            existing = await db.contacts.find_one({
+            existing_contact = await db.contacts.find_one({
                 "owner_id": user["id"], 
-                "email": email_payload.from_email
+                "email": from_email
             })
             
-            if not existing:
+            if not existing_contact:
+                contact_doc = {
+                    "id": str(uuid.uuid4()),
+                    "owner_id": user["id"],
+                    "name": sender_name,
+                    "email": from_email,
+                    "source": "email",
+                    "tags": ["email-contact"],
+                    "created_at": now_utc_iso(),
+                    "updated_at": now_utc_iso()
+                }
                 await db.contacts.insert_one(contact_doc)
-                print(f"Contact created: {email_payload.from_email}")
+                print(f"✅ Contact created: {from_email}")
+            else:
+                print(f"Contact already exists: {from_email}")
                 
         except Exception as e:
             print(f"Failed to create contact: {e}")
         
         # Auto-create ticket for support emails
         support_addresses = ['support@', 'info@', 'help@', 'contact@', 'service@']
-        is_support_email = any(addr in email_payload.to_email.lower() for addr in support_addresses)
-        has_support_keywords = any(keyword in email_payload.subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug', 'error', 'complaint', 'question'])
+        is_support_email = any(addr in to_email.lower() for addr in support_addresses)
+        has_support_keywords = any(keyword in subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug', 'error', 'complaint', 'question'])
         
         if is_support_email or has_support_keywords:
             try:
@@ -2536,33 +2568,34 @@ async def resend_email_webhook_with_user(owner_id: str, request: Request):
                 
                 # Determine priority based on keywords
                 priority = "medium"
-                if any(keyword in email_payload.subject.lower() for keyword in ['urgent', 'critical', 'emergency', 'asap']):
+                if any(keyword in subject.lower() for keyword in ['urgent', 'critical', 'emergency', 'asap']):
                     priority = "high"
-                elif any(keyword in email_payload.subject.lower() for keyword in ['low', 'minor', 'question', 'info']):
+                elif any(keyword in subject.lower() for keyword in ['low', 'minor', 'question', 'info']):
                     priority = "low"
                 
                 # Determine category based on content
                 category = "general"
-                if any(keyword in email_payload.body.lower() for keyword in ['bug', 'error', 'broken', 'not working']):
+                body_lower = body_text.lower()
+                if any(keyword in body_lower for keyword in ['bug', 'error', 'broken', 'not working']):
                     category = "bug"
-                elif any(keyword in email_payload.body.lower() for keyword in ['feature', 'request', 'enhancement', 'improvement']):
+                elif any(keyword in body_lower for keyword in ['feature', 'request', 'enhancement', 'improvement']):
                     category = "feature_request"
-                elif any(keyword in email_payload.body.lower() for keyword in ['billing', 'payment', 'invoice', 'subscription']):
+                elif any(keyword in body_lower for keyword in ['billing', 'payment', 'invoice', 'subscription']):
                     category = "billing"
-                elif any(keyword in email_payload.body.lower() for keyword in ['account', 'login', 'password', 'access']):
+                elif any(keyword in body_lower for keyword in ['account', 'login', 'password', 'access']):
                     category = "account"
                 
                 ticket_doc = {
                     "id": ticket_id,
                     "owner_id": user["id"],
-                    "subject": email_payload.subject,
-                    "description": email_payload.body,
+                    "subject": subject,
+                    "description": body_text,
                     "status": "open",
                     "priority": priority,
                     "category": category,
                     "channel": "email",
                     "requester_name": sender_name,
-                    "requester_email": email_payload.from_email,
+                    "requester_email": from_email,
                     "assignee_id": None,
                     "tags": ["email-generated", "auto-created"],
                     "source_email_id": email_id,
@@ -2571,24 +2604,26 @@ async def resend_email_webhook_with_user(owner_id: str, request: Request):
                     "comments": [{
                         "id": str(uuid.uuid4()),
                         "author": "System",
-                        "content": f"Ticket automatically created from email received at {email_payload.to_email}",
+                        "content": f"Ticket automatically created from email received at {to_email}",
                         "created_at": now_utc_iso(),
                         "is_internal": True
                     }]
                 }
                 
                 await db.tickets.insert_one(ticket_doc)
-                print(f"Auto-created ticket {ticket_id} from email to {email_payload.to_email}")
+                print(f"✅ Auto-created ticket {ticket_id} from email to {to_email}")
                 
             except Exception as e:
                 print(f"Failed to create ticket: {e}")
+                import traceback
+                traceback.print_exc()
         
         return {"ok": True, "email_id": email_id, "user_id": owner_id}
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Resend webhook error: {e}")
+        print(f"❌ Resend webhook error: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(500, f"Resend webhook error: {str(e)}")
