@@ -2303,25 +2303,60 @@ async def receive_email_webhook(payload: EmailWebhookIn):
             print(f"Failed to create contact: {e}")
         
         # Auto-create ticket for support emails
-        if any(keyword in payload.subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug']):
+        # Check if email is sent to support/info addresses OR contains support keywords
+        support_addresses = ['support@', 'info@', 'help@', 'contact@', 'service@']
+        is_support_email = any(addr in payload.to_email.lower() for addr in support_addresses)
+        has_support_keywords = any(keyword in payload.subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug', 'error', 'complaint', 'question'])
+        
+        if is_support_email or has_support_keywords:
             try:
                 ticket_id = str(uuid.uuid4())
+                
+                # Determine priority based on keywords
+                priority = "medium"
+                if any(keyword in payload.subject.lower() for keyword in ['urgent', 'critical', 'emergency', 'asap']):
+                    priority = "high"
+                elif any(keyword in payload.subject.lower() for keyword in ['low', 'minor', 'question', 'info']):
+                    priority = "low"
+                
+                # Determine category based on content
+                category = "general"
+                if any(keyword in payload.body.lower() for keyword in ['bug', 'error', 'broken', 'not working']):
+                    category = "bug"
+                elif any(keyword in payload.body.lower() for keyword in ['feature', 'request', 'enhancement', 'improvement']):
+                    category = "feature_request"
+                elif any(keyword in payload.body.lower() for keyword in ['billing', 'payment', 'invoice', 'subscription']):
+                    category = "billing"
+                elif any(keyword in payload.body.lower() for keyword in ['account', 'login', 'password', 'access']):
+                    category = "account"
+                
                 ticket_doc = {
                     "id": ticket_id,
                     "owner_id": user["id"],
-                    "subject": f"Email: {payload.subject}",
-                    "description": payload.body[:500] + ("..." if len(payload.body) > 500 else ""),
+                    "subject": payload.subject,  # Use original subject, not prefixed
+                    "description": payload.body,
                     "status": "open",
-                    "priority": "medium",
+                    "priority": priority,
+                    "category": category,
                     "channel": "email",
                     "requester_name": sender_name,
                     "requester_email": payload.from_email,
+                    "assignee_id": None,  # Will be auto-assigned by ticket system
+                    "tags": ["email-generated", "auto-created"],
+                    "source_email_id": email_id,  # Link back to original email
                     "created_at": now_utc_iso(),
                     "updated_at": now_utc_iso(),
-                    "comments": []
+                    "comments": [{
+                        "id": str(uuid.uuid4()),
+                        "author": "System",
+                        "content": f"Ticket automatically created from email received at {payload.to_email}",
+                        "created_at": now_utc_iso(),
+                        "is_internal": True
+                    }]
                 }
                 
                 await db.tickets.insert_one(ticket_doc)
+                print(f"Auto-created ticket {ticket_id} from email to {payload.to_email}")
                 
             except Exception as e:
                 print(f"Failed to create ticket: {e}")
@@ -2381,6 +2416,78 @@ async def list_inbound_emails(user=Depends(get_current_user)):
         "direction": "inbound"
     }, {"_id": 0}).sort("received_at", -1).to_list(500)
     return items
+
+@api_router.get("/emails/{email_id}/ticket")
+async def get_email_ticket(email_id: str, user=Depends(get_current_user)):
+    """Get ticket created from an email"""
+    ticket = await db.tickets.find_one({
+        "owner_id": user["id"],
+        "source_email_id": email_id
+    }, {"_id": 0})
+    
+    if not ticket:
+        raise HTTPException(404, "No ticket found for this email")
+    
+    return ticket
+
+@api_router.post("/emails/{email_id}/create-ticket")
+async def create_ticket_from_email(email_id: str, user=Depends(get_current_user)):
+    """Manually create a ticket from an email"""
+    # Get the email
+    email = await db.emails.find_one({
+        "owner_id": user["id"],
+        "id": email_id
+    }, {"_id": 0})
+    
+    if not email:
+        raise HTTPException(404, "Email not found")
+    
+    # Check if ticket already exists
+    existing_ticket = await db.tickets.find_one({
+        "owner_id": user["id"],
+        "source_email_id": email_id
+    })
+    
+    if existing_ticket:
+        raise HTTPException(400, "Ticket already exists for this email")
+    
+    try:
+        ticket_id = str(uuid.uuid4())
+        
+        # Extract sender name
+        sender_name = email.get("from_email", "").split('@')[0].replace('.', ' ').title()
+        
+        ticket_doc = {
+            "id": ticket_id,
+            "owner_id": user["id"],
+            "subject": email.get("subject", "Email Support Request"),
+            "description": email.get("body", ""),
+            "status": "open",
+            "priority": "medium",
+            "category": "general",
+            "channel": "email",
+            "requester_name": sender_name,
+            "requester_email": email.get("from_email", ""),
+            "assignee_id": None,
+            "tags": ["email-generated", "manual-creation"],
+            "source_email_id": email_id,
+            "created_at": now_utc_iso(),
+            "updated_at": now_utc_iso(),
+            "comments": [{
+                "id": str(uuid.uuid4()),
+                "author": user["name"],
+                "content": f"Ticket manually created from email",
+                "created_at": now_utc_iso(),
+                "is_internal": True
+            }]
+        }
+        
+        await db.tickets.insert_one(ticket_doc)
+        return {"ok": True, "ticket_id": ticket_id, "ticket": ticket_doc}
+        
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create ticket: {str(e)}")
+
 class EmailTemplateIn(BaseModel):
     name: str
     subject: str

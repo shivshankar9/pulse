@@ -4,7 +4,7 @@ import {
     Send, Sparkles, RefreshCw, Search, Filter, User, Calendar, Zap, X, Plus,
     Mail, MailOpen, Inbox, Reply, Forward, Archive, Trash2, Star, StarOff,
     Clock, AlertCircle, CheckCircle, Eye, Edit, Paperclip, Download, MoreHorizontal,
-    ChevronDown, Settings, Tag, Users, FileText, Phone, MessageSquare
+    ChevronDown, Settings, Tag, Users, FileText, Phone, MessageSquare, Ticket
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -43,6 +43,7 @@ const Emails = () => {
     const [showCanned, setShowCanned] = useState(false);
     const [selectedEmails, setSelectedEmails] = useState(new Set());
     const [showFilters, setShowFilters] = useState(false);
+    const [emailTickets, setEmailTickets] = useState(new Map()); // Store email-ticket relationships
 
     const load = useCallback(async () => {
         try {
@@ -68,6 +69,19 @@ const Emails = () => {
             setContacts(c.data || []);
             setTemplates(t.data || []);
             setCannedResponses(cr.data || []);
+            
+            // Load ticket information for inbound emails
+            const ticketMap = new Map();
+            for (const email of combined.filter(e => e.direction === 'inbound')) {
+                try {
+                    const ticketResponse = await api.get(`/emails/${email.id}/ticket`);
+                    ticketMap.set(email.id, ticketResponse.data);
+                } catch (error) {
+                    // No ticket exists for this email, which is fine
+                }
+            }
+            setEmailTickets(ticketMap);
+            
         } catch (error) {
             console.error("Failed to load data:", error);
             toast.error("Failed to load emails");
@@ -192,12 +206,29 @@ const Emails = () => {
         setSelectedEmails(newSelected);
     };
 
-    const selectAllEmails = () => {
-        if (selectedEmails.size === filteredEmails.length) {
-            setSelectedEmails(new Set());
-        } else {
-            setSelectedEmails(new Set(filteredEmails.map(e => e.id)));
+    const createTicketFromEmail = async (email) => {
+        try {
+            const response = await api.post(`/emails/${email.id}/create-ticket`);
+            toast.success("Ticket created successfully");
+            
+            // Update the email tickets map
+            const newTicketMap = new Map(emailTickets);
+            newTicketMap.set(email.id, response.data.ticket);
+            setEmailTickets(newTicketMap);
+            
+            return response.data.ticket;
+        } catch (error) {
+            if (error.response?.status === 400) {
+                toast.error("Ticket already exists for this email");
+            } else {
+                toast.error("Failed to create ticket: " + (error.response?.data?.detail || ""));
+            }
         }
+    };
+
+    const viewTicket = (ticketId) => {
+        // Navigate to ticket view - you can implement this based on your routing
+        window.open(`/tickets?id=${ticketId}`, '_blank');
     };
 
     if (loading) {
@@ -419,6 +450,15 @@ const Emails = () => {
                                                                     {email.attachments.length}
                                                                 </div>
                                                             )}
+                                                            
+                                                            {/* Ticket Status Indicator */}
+                                                            {isInbound && emailTickets.has(email.id) && (
+                                                                <div className="flex items-center gap-1 text-xs text-green-600">
+                                                                    <Ticket className="w-3 h-3" />
+                                                                    Ticket Created
+                                                                </div>
+                                                            )}
+                                                            
                                                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                                                                 isInbound 
                                                                     ? "bg-blue-100 text-blue-700" 
@@ -499,6 +539,32 @@ const Emails = () => {
                                         >
                                             <Forward className="w-4 h-4" />
                                         </button>
+                                        
+                                        {/* Ticket Actions for Inbound Emails */}
+                                        {selectedEmail.direction === 'inbound' && (
+                                            <>
+                                                {emailTickets.has(selectedEmail.id) ? (
+                                                    <button
+                                                        onClick={() => viewTicket(emailTickets.get(selectedEmail.id).id)}
+                                                        className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-2"
+                                                        title="View Ticket"
+                                                    >
+                                                        <Ticket className="w-4 h-4" />
+                                                        View Ticket
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => createTicketFromEmail(selectedEmail)}
+                                                        className="bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 flex items-center gap-2"
+                                                        title="Create Ticket"
+                                                    >
+                                                        <Ticket className="w-4 h-4" />
+                                                        Create Ticket
+                                                    </button>
+                                                )}
+                                            </>
+                                        )}
+                                        
                                         <button className="text-gray-600 hover:text-gray-800 p-2 rounded-lg hover:bg-gray-100">
                                             <MoreHorizontal className="w-4 h-4" />
                                         </button>
@@ -526,6 +592,42 @@ const Emails = () => {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* Ticket Information */}
+                                {selectedEmail.direction === 'inbound' && emailTickets.has(selectedEmail.id) && (
+                                    <div className="mt-6 pt-4 border-t border-gray-200">
+                                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <Ticket className="w-5 h-5 text-green-600" />
+                                                <h3 className="font-medium text-green-900">Support Ticket Created</h3>
+                                            </div>
+                                            <div className="text-sm text-green-700 mb-3">
+                                                A support ticket has been automatically created from this email.
+                                            </div>
+                                            <div className="flex items-center gap-4 text-sm">
+                                                <div>
+                                                    <span className="font-medium text-green-900">Ticket ID:</span>
+                                                    <span className="ml-1 text-green-700">{emailTickets.get(selectedEmail.id)?.id}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-green-900">Status:</span>
+                                                    <span className="ml-1 text-green-700 capitalize">{emailTickets.get(selectedEmail.id)?.status}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-green-900">Priority:</span>
+                                                    <span className="ml-1 text-green-700 capitalize">{emailTickets.get(selectedEmail.id)?.priority}</span>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => viewTicket(emailTickets.get(selectedEmail.id).id)}
+                                                className="mt-3 bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-2"
+                                            >
+                                                <Eye className="w-4 h-4" />
+                                                View Full Ticket
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
 
                                 {/* Attachments */}
                                 {selectedEmail.attachments && selectedEmail.attachments.length > 0 && (
