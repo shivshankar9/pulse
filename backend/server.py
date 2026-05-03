@@ -2390,22 +2390,207 @@ async def sendgrid_email_webhook(request: Request):
         raise HTTPException(500, f"SendGrid webhook error: {str(e)}")
 
 @api_router.post("/webhooks/email/resend")
-async def resend_email_webhook(payload: dict):
-    """Resend-specific email webhook"""
+async def resend_email_webhook(request: Request):
+    """Resend-specific email webhook - handles inbound emails from Resend"""
     try:
+        # Get the raw payload from Resend
+        payload = await request.json()
+        
+        print(f"Resend webhook received: {payload}")
+        
+        # Resend sends data in a specific format
+        # Extract email data from Resend's payload structure
+        data = payload.get('data', payload)  # Sometimes wrapped in 'data'
+        
+        # Map Resend fields to our EmailWebhookIn format
+        from_email = data.get('from', data.get('from_email', ''))
+        to_email = data.get('to', data.get('to_email', ''))
+        
+        # Handle 'to' field which might be an array
+        if isinstance(to_email, list):
+            to_email = to_email[0] if to_email else ''
+        
+        # Handle 'from' field which might be an object
+        if isinstance(from_email, dict):
+            from_email = from_email.get('email', from_email.get('address', ''))
+        
         email_payload = EmailWebhookIn(
-            from_email=payload.get('from', ''),
-            to_email=payload.get('to', ''),
-            subject=payload.get('subject', ''),
-            body=payload.get('text', ''),
-            html_body=payload.get('html', ''),
-            message_id=payload.get('message_id', ''),
-            timestamp=payload.get('created_at', '')
+            from_email=from_email,
+            to_email=to_email,
+            subject=data.get('subject', ''),
+            body=data.get('text', data.get('body', '')),
+            html_body=data.get('html', data.get('html_body', '')),
+            message_id=data.get('message_id', data.get('id', '')),
+            timestamp=data.get('created_at', data.get('timestamp', ''))
         )
+        
+        print(f"Processed email payload: from={email_payload.from_email}, to={email_payload.to_email}, subject={email_payload.subject}")
         
         return await receive_email_webhook(email_payload)
         
     except Exception as e:
+        print(f"Resend webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Resend webhook error: {str(e)}")
+
+@api_router.post("/webhooks/resend/{owner_id}")
+async def resend_email_webhook_with_user(owner_id: str, request: Request):
+    """Resend-specific email webhook with user ID in URL - handles inbound emails from Resend"""
+    try:
+        # Get the raw payload from Resend
+        payload = await request.json()
+        
+        print(f"Resend webhook received for user {owner_id}: {payload}")
+        
+        # Resend sends data in a specific format
+        # Extract email data from Resend's payload structure
+        data = payload.get('data', payload)  # Sometimes wrapped in 'data'
+        
+        # Map Resend fields to our EmailWebhookIn format
+        from_email = data.get('from', data.get('from_email', ''))
+        to_email = data.get('to', data.get('to_email', ''))
+        
+        # Handle 'to' field which might be an array
+        if isinstance(to_email, list):
+            to_email = to_email[0] if to_email else ''
+        
+        # Handle 'from' field which might be an object
+        if isinstance(from_email, dict):
+            from_email = from_email.get('email', from_email.get('address', ''))
+        
+        email_payload = EmailWebhookIn(
+            from_email=from_email,
+            to_email=to_email,
+            subject=data.get('subject', ''),
+            body=data.get('text', data.get('body', '')),
+            html_body=data.get('html', data.get('html_body', '')),
+            message_id=data.get('message_id', data.get('id', '')),
+            timestamp=data.get('created_at', data.get('timestamp', ''))
+        )
+        
+        print(f"Processed email payload for user {owner_id}: from={email_payload.from_email}, to={email_payload.to_email}, subject={email_payload.subject}")
+        
+        # Find the specific user by ID
+        user = await db.users.find_one({"id": owner_id}, {"_id": 0})
+        
+        if not user:
+            print(f"User not found: {owner_id}")
+            raise HTTPException(404, f"User not found: {owner_id}")
+        
+        # Create email record directly for this user
+        email_id = str(uuid.uuid4())
+        sender_name = email_payload.from_email.split('@')[0].replace('.', ' ').title()
+        
+        email_doc = {
+            "id": email_id,
+            "owner_id": user["id"],
+            "from_email": email_payload.from_email,
+            "to_email": email_payload.to_email,
+            "subject": email_payload.subject,
+            "body": email_payload.body,
+            "html_body": email_payload.html_body,
+            "direction": "inbound",
+            "message_id": email_payload.message_id,
+            "received_at": email_payload.timestamp or now_utc_iso(),
+            "created_at": now_utc_iso(),
+            "attachments": email_payload.attachments or []
+        }
+        
+        await db.emails.insert_one(email_doc)
+        print(f"Email saved: {email_id}")
+        
+        # Try to create/update contact from sender
+        try:
+            contact_doc = {
+                "id": str(uuid.uuid4()),
+                "owner_id": user["id"],
+                "name": sender_name,
+                "email": email_payload.from_email,
+                "source": "email",
+                "tags": ["email-contact"],
+                "created_at": now_utc_iso(),
+                "updated_at": now_utc_iso()
+            }
+            
+            existing = await db.contacts.find_one({
+                "owner_id": user["id"], 
+                "email": email_payload.from_email
+            })
+            
+            if not existing:
+                await db.contacts.insert_one(contact_doc)
+                print(f"Contact created: {email_payload.from_email}")
+                
+        except Exception as e:
+            print(f"Failed to create contact: {e}")
+        
+        # Auto-create ticket for support emails
+        support_addresses = ['support@', 'info@', 'help@', 'contact@', 'service@']
+        is_support_email = any(addr in email_payload.to_email.lower() for addr in support_addresses)
+        has_support_keywords = any(keyword in email_payload.subject.lower() for keyword in ['support', 'help', 'issue', 'problem', 'bug', 'error', 'complaint', 'question'])
+        
+        if is_support_email or has_support_keywords:
+            try:
+                ticket_id = str(uuid.uuid4())
+                
+                # Determine priority based on keywords
+                priority = "medium"
+                if any(keyword in email_payload.subject.lower() for keyword in ['urgent', 'critical', 'emergency', 'asap']):
+                    priority = "high"
+                elif any(keyword in email_payload.subject.lower() for keyword in ['low', 'minor', 'question', 'info']):
+                    priority = "low"
+                
+                # Determine category based on content
+                category = "general"
+                if any(keyword in email_payload.body.lower() for keyword in ['bug', 'error', 'broken', 'not working']):
+                    category = "bug"
+                elif any(keyword in email_payload.body.lower() for keyword in ['feature', 'request', 'enhancement', 'improvement']):
+                    category = "feature_request"
+                elif any(keyword in email_payload.body.lower() for keyword in ['billing', 'payment', 'invoice', 'subscription']):
+                    category = "billing"
+                elif any(keyword in email_payload.body.lower() for keyword in ['account', 'login', 'password', 'access']):
+                    category = "account"
+                
+                ticket_doc = {
+                    "id": ticket_id,
+                    "owner_id": user["id"],
+                    "subject": email_payload.subject,
+                    "description": email_payload.body,
+                    "status": "open",
+                    "priority": priority,
+                    "category": category,
+                    "channel": "email",
+                    "requester_name": sender_name,
+                    "requester_email": email_payload.from_email,
+                    "assignee_id": None,
+                    "tags": ["email-generated", "auto-created"],
+                    "source_email_id": email_id,
+                    "created_at": now_utc_iso(),
+                    "updated_at": now_utc_iso(),
+                    "comments": [{
+                        "id": str(uuid.uuid4()),
+                        "author": "System",
+                        "content": f"Ticket automatically created from email received at {email_payload.to_email}",
+                        "created_at": now_utc_iso(),
+                        "is_internal": True
+                    }]
+                }
+                
+                await db.tickets.insert_one(ticket_doc)
+                print(f"Auto-created ticket {ticket_id} from email to {email_payload.to_email}")
+                
+            except Exception as e:
+                print(f"Failed to create ticket: {e}")
+        
+        return {"ok": True, "email_id": email_id, "user_id": owner_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Resend webhook error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, f"Resend webhook error: {str(e)}")
 
 @api_router.get("/emails/inbound")
