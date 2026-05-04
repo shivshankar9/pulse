@@ -1,0 +1,524 @@
+{
+  "workflows": [
+    {
+      "name": "Lead Processing Automation",
+      "description": "Processes new leads from OpenClaw, enriches them, and creates CRM contacts",
+      "workflow": {
+        "name": "Lead Processing Automation",
+        "nodes": [
+          {
+            "parameters": {
+              "httpMethod": "POST",
+              "path": "openclaw-leads",
+              "responseMode": "responseNode",
+              "options": {}
+            },
+            "name": "Webhook - Receive Leads",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [240, 300],
+            "id": "webhook-leads"
+          },
+          {
+            "parameters": {
+              "functionCode": "// Process each lead from the webhook\nconst leads = $input.first().json.leads || [];\nconst processedLeads = [];\n\nfor (const lead of leads) {\n  // Validate required fields\n  if (lead.company_name && lead.phone) {\n    processedLeads.push({\n      ...lead,\n      processed_at: new Date().toISOString(),\n      needs_enrichment: !lead.email\n    });\n  }\n}\n\nreturn processedLeads.map(lead => ({ json: lead }));"
+            },
+            "name": "Process Leads",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [460, 300],
+            "id": "process-leads"
+          },
+          {
+            "parameters": {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{$json.needs_enrichment}}",
+                    "value2": "true"
+                  }
+                ]
+              }
+            },
+            "name": "Needs Enrichment?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [680, 300],
+            "id": "check-enrichment"
+          },
+          {
+            "parameters": {
+              "url": "https://api.hunter.io/v2/email-finder",
+              "options": {
+                "queryParameters": {
+                  "domain": "={{$json.website ? $json.website.replace('https://', '').replace('http://', '').split('/')[0] : ''}}",
+                  "api_key": "={{$credentials.hunterApi.apiKey}}"
+                }
+              }
+            },
+            "name": "Find Email - Hunter.io",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [900, 200],
+            "id": "find-email"
+          },
+          {
+            "parameters": {
+              "functionCode": "// Merge enriched email data\nconst leadData = $input.first().json;\nconst emailData = $input.last().json;\n\nif (emailData.data && emailData.data.email) {\n  leadData.email = emailData.data.email;\n  leadData.email_confidence = emailData.data.confidence;\n}\n\nreturn { json: leadData };"
+            },
+            "name": "Merge Email Data",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [1120, 200],
+            "id": "merge-email"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/contacts",
+              "options": {
+                "headers": {
+                  "Authorization": "Bearer {{$env.CRM_API_TOKEN}}",
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "name": "={{$json.company_name}}",
+                  "phone": "={{$json.phone}}",
+                  "email": "={{$json.email || ''}}",
+                  "company": "={{$json.company_name}}",
+                  "address": "={{$json.address || ''}}",
+                  "website": "={{$json.website || ''}}",
+                  "source": "OpenClaw Automation",
+                  "tags": "={{$json.tags || ['scraped', 'openclaw']}}",
+                  "notes": "Auto-generated from OpenClaw scraping",
+                  "custom": {
+                    "lead_score": "={{$json.lead_score || 50}}",
+                    "scraped_at": "={{$json.scraped_at}}",
+                    "category": "={{$json.category}}"
+                  }
+                }
+              }
+            },
+            "name": "Create CRM Contact",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1340, 300],
+            "id": "create-contact"
+          },
+          {
+            "parameters": {
+              "respondWith": "json",
+              "responseBody": "={{ { success: true, processed: $input.all().length, contacts_created: $input.all().filter(item => item.json.id).length } }}"
+            },
+            "name": "Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [1560, 300],
+            "id": "response"
+          }
+        ],
+        "connections": {
+          "Webhook - Receive Leads": {
+            "main": [["Process Leads"]]
+          },
+          "Process Leads": {
+            "main": [["Needs Enrichment?"]]
+          },
+          "Needs Enrichment?": {
+            "main": [
+              ["Find Email - Hunter.io"],
+              ["Create CRM Contact"]
+            ]
+          },
+          "Find Email - Hunter.io": {
+            "main": [["Merge Email Data"]]
+          },
+          "Merge Email Data": {
+            "main": [["Create CRM Contact"]]
+          },
+          "Create CRM Contact": {
+            "main": [["Response"]]
+          }
+        }
+      }
+    },
+    {
+      "name": "Smart Ticket Response",
+      "description": "Automatically categorizes and responds to support tickets using AI",
+      "workflow": {
+        "name": "Smart Ticket Response",
+        "nodes": [
+          {
+            "parameters": {
+              "httpMethod": "POST",
+              "path": "new-ticket",
+              "responseMode": "responseNode"
+            },
+            "name": "Webhook - New Ticket",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [240, 300],
+            "id": "webhook-ticket"
+          },
+          {
+            "parameters": {
+              "model": "gpt-3.5-turbo",
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "Analyze this support ticket and return a JSON response with:\n1. category: technical, billing, general, or urgent\n2. priority: low, medium, high, or critical\n3. suggested_response: A helpful response to the customer\n4. estimated_resolution_time: in hours\n5. requires_human: true/false"
+                },
+                {
+                  "role": "user",
+                  "content": "Subject: {{$json.subject}}\nContent: {{$json.content}}\nCustomer: {{$json.customer_name}}"
+                }
+              ]
+            },
+            "name": "AI Ticket Analysis",
+            "type": "n8n-nodes-base.openAi",
+            "typeVersion": 1,
+            "position": [460, 300],
+            "id": "ai-analysis"
+          },
+          {
+            "parameters": {
+              "functionCode": "// Parse AI response and prepare ticket updates\nconst ticketData = $input.first().json;\nconst aiResponse = $input.last().json;\n\nlet analysis;\ntry {\n  analysis = JSON.parse(aiResponse.message.content);\n} catch (e) {\n  // Fallback if AI doesn't return valid JSON\n  analysis = {\n    category: 'general',\n    priority: 'medium',\n    suggested_response: 'Thank you for contacting us. We will review your request and get back to you soon.',\n    estimated_resolution_time: 24,\n    requires_human: true\n  };\n}\n\nreturn {\n  json: {\n    ...ticketData,\n    ...analysis,\n    analyzed_at: new Date().toISOString()\n  }\n};"
+            },
+            "name": "Parse AI Response",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [680, 300],
+            "id": "parse-ai"
+          },
+          {
+            "parameters": {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{$json.priority}}",
+                    "value2": "critical"
+                  }
+                ]
+              }
+            },
+            "name": "Is Critical?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [900, 300],
+            "id": "check-critical"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/webhooks/n8n/ticket-update",
+              "options": {
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "ticket_id": "={{$json.ticket_id}}",
+                  "updates": {
+                    "priority": "critical",
+                    "status": "escalated",
+                    "assigned_to": "urgent-team@company.com",
+                    "tags": ["urgent", "auto-escalated", "ai-analyzed"],
+                    "ai_analysis": {
+                      "category": "={{$json.category}}",
+                      "estimated_resolution_time": "={{$json.estimated_resolution_time}}",
+                      "analyzed_at": "={{$json.analyzed_at}}"
+                    }
+                  }
+                }
+              }
+            },
+            "name": "Escalate Critical Ticket",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1120, 200],
+            "id": "escalate-ticket"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/webhooks/n8n/ticket-update",
+              "options": {
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "ticket_id": "={{$json.ticket_id}}",
+                  "updates": {
+                    "priority": "={{$json.priority}}",
+                    "category": "={{$json.category}}",
+                    "tags": ["ai-analyzed", "auto-categorized"],
+                    "estimated_resolution_time": "={{$json.estimated_resolution_time}}",
+                    "ai_analysis": {
+                      "category": "={{$json.category}}",
+                      "priority": "={{$json.priority}}",
+                      "requires_human": "={{$json.requires_human}}",
+                      "analyzed_at": "={{$json.analyzed_at}}"
+                    }
+                  }
+                }
+              }
+            },
+            "name": "Update Normal Ticket",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1120, 400],
+            "id": "update-ticket"
+          },
+          {
+            "parameters": {
+              "conditions": {
+                "boolean": [
+                  {
+                    "value1": "={{$json.requires_human}}",
+                    "value2": false
+                  }
+                ]
+              }
+            },
+            "name": "Can Auto-Respond?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [1340, 300],
+            "id": "check-auto-respond"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/emails/send",
+              "options": {
+                "headers": {
+                  "Authorization": "Bearer {{$env.CRM_API_TOKEN}}",
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "to": "={{$json.customer_email}}",
+                  "subject": "Re: {{$json.subject}}",
+                  "body": "={{$json.suggested_response}}",
+                  "ticket_id": "={{$json.ticket_id}}",
+                  "type": "auto_response"
+                }
+              }
+            },
+            "name": "Send Auto Response",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1560, 200],
+            "id": "send-response"
+          }
+        ],
+        "connections": {
+          "Webhook - New Ticket": {
+            "main": [["AI Ticket Analysis"]]
+          },
+          "AI Ticket Analysis": {
+            "main": [["Parse AI Response"]]
+          },
+          "Parse AI Response": {
+            "main": [["Is Critical?"]]
+          },
+          "Is Critical?": {
+            "main": [
+              ["Escalate Critical Ticket"],
+              ["Update Normal Ticket"]
+            ]
+          },
+          "Escalate Critical Ticket": {
+            "main": [["Can Auto-Respond?"]]
+          },
+          "Update Normal Ticket": {
+            "main": [["Can Auto-Respond?"]]
+          },
+          "Can Auto-Respond?": {
+            "main": [
+              ["Send Auto Response"],
+              []
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Customer Journey Automation",
+      "description": "Automates customer onboarding and follow-up sequences",
+      "workflow": {
+        "name": "Customer Journey Automation",
+        "nodes": [
+          {
+            "parameters": {
+              "httpMethod": "POST",
+              "path": "new-contact",
+              "responseMode": "responseNode"
+            },
+            "name": "Webhook - New Contact",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [240, 300],
+            "id": "webhook-contact"
+          },
+          {
+            "parameters": {
+              "amount": 1,
+              "unit": "hours"
+            },
+            "name": "Wait 1 Hour",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1,
+            "position": [460, 300],
+            "id": "wait-1hour"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/emails/send",
+              "options": {
+                "headers": {
+                  "Authorization": "Bearer {{$env.CRM_API_TOKEN}}",
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "to": "={{$json.email}}",
+                  "subject": "Welcome to {{$env.COMPANY_NAME}}!",
+                  "template": "welcome_email",
+                  "variables": {
+                    "customer_name": "={{$json.name}}",
+                    "company_name": "={{$json.company || ''}}"
+                  },
+                  "contact_id": "={{$json.contact_id}}"
+                }
+              }
+            },
+            "name": "Send Welcome Email",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [680, 300],
+            "id": "welcome-email"
+          },
+          {
+            "parameters": {
+              "amount": 3,
+              "unit": "days"
+            },
+            "name": "Wait 3 Days",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1,
+            "position": [900, 300],
+            "id": "wait-3days"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/contacts/{{$json.contact_id}}/engagement",
+              "options": {
+                "headers": {
+                  "Authorization": "Bearer {{$env.CRM_API_TOKEN}}"
+                }
+              }
+            },
+            "name": "Check Engagement",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1120, 300],
+            "id": "check-engagement"
+          },
+          {
+            "parameters": {
+              "conditions": {
+                "number": [
+                  {
+                    "value1": "={{$json.email_opens || 0}}",
+                    "operation": "equal",
+                    "value2": 0
+                  }
+                ]
+              }
+            },
+            "name": "No Engagement?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [1340, 300],
+            "id": "check-no-engagement"
+          },
+          {
+            "parameters": {
+              "url": "={{$env.CRM_BASE_URL}}/api/emails/send",
+              "options": {
+                "headers": {
+                  "Authorization": "Bearer {{$env.CRM_API_TOKEN}}",
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "to": "={{$json.email}}",
+                  "subject": "We'd love to hear from you!",
+                  "template": "follow_up_email",
+                  "variables": {
+                    "customer_name": "={{$json.name}}"
+                  },
+                  "contact_id": "={{$json.contact_id}}"
+                }
+              }
+            },
+            "name": "Send Follow-up Email",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [1560, 200],
+            "id": "followup-email"
+          }
+        ],
+        "connections": {
+          "Webhook - New Contact": {
+            "main": [["Wait 1 Hour"]]
+          },
+          "Wait 1 Hour": {
+            "main": [["Send Welcome Email"]]
+          },
+          "Send Welcome Email": {
+            "main": [["Wait 3 Days"]]
+          },
+          "Wait 3 Days": {
+            "main": [["Check Engagement"]]
+          },
+          "Check Engagement": {
+            "main": [["No Engagement?"]]
+          },
+          "No Engagement?": {
+            "main": [
+              ["Send Follow-up Email"],
+              []
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "setup_instructions": {
+    "prerequisites": [
+      "n8n installed and running",
+      "CRM webhook endpoints configured",
+      "API credentials for external services (Hunter.io, OpenAI, etc.)"
+    ],
+    "environment_variables": {
+      "CRM_BASE_URL": "https://your-crm.com",
+      "CRM_API_TOKEN": "your-crm-api-token",
+      "COMPANY_NAME": "Your Company Name"
+    },
+    "credentials_needed": [
+      {
+        "name": "hunterApi",
+        "type": "Hunter.io API",
+        "fields": ["apiKey"]
+      },
+      {
+        "name": "openAiApi", 
+        "type": "OpenAI API",
+        "fields": ["apiKey"]
+      }
+    ],
+    "import_instructions": [
+      "1. Open n8n dashboard",
+      "2. Go to Workflows section",
+      "3. Click 'Import from JSON'",
+      "4. Copy and paste each workflow JSON",
+      "5. Configure credentials and environment variables",
+      "6. Activate the workflows",
+      "7. Test with sample data"
+    ]
+  }
+}

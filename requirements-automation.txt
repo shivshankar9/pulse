@@ -1,0 +1,56 @@
+# OpenClaw + n8n Business Automation Requirements
+# Install with: pip install -r requirements-automation.txt
+
+# Core automation libraries
+requests>=2.31.0
+schedule>=1.2.0
+
+# Web scraping libraries
+beautifulsoup4>=4.12.0
+selenium>=4.15.0
+scrapy>=2.11.0
+playwright>=1.40.0
+
+# Data processing
+pandas>=2.1.0
+numpy>=1.24.0
+
+# OpenClaw (if available via pip, otherwise install from source)
+# openclaw>=1.0.0
+
+# Alternative web scraping tools
+scrapfly-sdk>=0.8.0
+scrapingbee>=1.1.0
+
+# Email finding and enrichment
+clearbit>=0.1.7
+hunter>=2.2.0
+
+# AI and ML for lead scoring
+openai>=1.3.0
+anthropic>=0.7.0
+
+# Database and storage
+pymongo>=4.6.0
+redis>=5.0.0
+sqlalchemy>=2.0.0
+
+# Monitoring and logging
+sentry-sdk>=1.38.0
+loguru>=0.7.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+typer>=0.9.0
+rich>=13.7.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+responses>=0.24.0
+
+# Development tools
+black>=23.11.0
+flake8>=6.1.0
+mypy>=1.7.0

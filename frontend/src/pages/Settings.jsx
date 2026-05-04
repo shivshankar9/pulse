@@ -3,12 +3,14 @@ import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { toast } from "sonner";
 import { 
-    Mail, MessageCircle, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check, X,
+    Mail, MessageCircle, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check,
     Webhook, Copy, LifeBuoy, Globe, RefreshCw, CheckCircle2, AlertCircle, Info, Key
 } from "lucide-react";
+import AutomationSettings from "../components/AutomationSettings";
 
 const TABS = [
     { id: "integrations", label: "Integrations", icon: Key },
+    { id: "automation", label: "Automation", icon: RefreshCw },
     { id: "domains", label: "Domains & Email", icon: Mail },
     { id: "roles", label: "Roles & Permissions", icon: Shield },
     { id: "team", label: "Team", icon: UsersIcon },
@@ -81,6 +83,7 @@ const Settings = () => {
                 </div>
 
                 {tab === "integrations" && <IntegrationsTab />}
+                {tab === "automation" && <AutomationSettings />}
                 {tab === "domains" && <DomainsTab />}
                 {tab === "roles" && <RolesTab />}
                 {tab === "team" && <TeamTab />}

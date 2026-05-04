@@ -1,0 +1,231 @@
+version: '3.8'
+
+services:
+  # n8n Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: pulse-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-automation123}
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://crm:8000
+      - CRM_BASE_URL=http://crm:8000
+      - CRM_API_TOKEN=${CRM_API_TOKEN}
+      - COMPANY_NAME=${COMPANY_NAME:-Pulse CRM}
+      # External API keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./scripts/n8n_workflows.json:/tmp/workflows.json:ro
+    depends_on:
+      - crm
+      - redis
+    networks:
+      - automation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # OpenClaw Web Scraper
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile.openclaw
+    container_name: pulse-openclaw
+    environment:
+      - CRM_WEBHOOK_URL=http://crm:8000/api/webhooks/openclaw/leads
+      - SCRAPING_INTERVAL=${SCRAPING_INTERVAL:-24}
+      - MAX_LEADS_PER_RUN=${MAX_LEADS_PER_RUN:-50}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
+      - CLEARBIT_API_KEY=${CLEARBIT_API_KEY}
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - openclaw_data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - crm
+      - redis
+    networks:
+      - automation-network
+    restart: unless-stopped
+    command: ["python", "/app/scripts/openclaw_lead_scraper.py"]
+
+  # Your CRM Backend
+  crm:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pulse-crm
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URL=${MONGO_URL}
+      - USE_MOCK_DB=${USE_MOCK_DB:-false}
+      - JWT_SECRET=${JWT_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - INTEGRATIONS_KEY=${INTEGRATIONS_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+      - mongodb
+    networks:
+      - automation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for caching and job queues
+  redis:
+    image: redis:7-alpine
+    container_name: pulse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - automation-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MongoDB for data storage
+  mongodb:
+    image: mongo:7
+    container_name: pulse-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:-password}
+      - MONGO_INITDB_DATABASE=pulse_crm
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - automation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Competitor Monitoring Service
+  competitor-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.competitor
+    container_name: pulse-competitor-monitor
+    environment:
+      - CRM_WEBHOOK_URL=http://crm:8000/api/webhooks/openclaw/competitor-data
+      - MONITORING_INTERVAL=${COMPETITOR_MONITORING_INTERVAL:-6}
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./config/competitors.json:/app/config/competitors.json:ro
+      - competitor_data:/app/data
+    depends_on:
+      - crm
+      - redis
+    networks:
+      - automation-network
+    restart: unless-stopped
+
+  # Automation Scheduler
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    container_name: pulse-scheduler
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CRM_BASE_URL=http://crm:8000
+      - N8N_BASE_URL=http://n8n:5678
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./config:/app/config:ro
+    depends_on:
+      - crm
+      - n8n
+      - redis
+    networks:
+      - automation-network
+    restart: unless-stopped
+
+  # Monitoring and Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: pulse-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - automation-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: pulse-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning:ro
+    networks:
+      - automation-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+networks:
+  automation-network:
+    driver: bridge
+
+volumes:
+  n8n_data:
+    driver: local
+  openclaw_data:
+    driver: local
+  competitor_data:
+    driver: local
+  redis_data:
+    driver: local
+  mongodb_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

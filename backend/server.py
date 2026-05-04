@@ -4208,6 +4208,265 @@ async def public_verify_domain(domain: str):
         raise HTTPException(404, "Domain not found")
     return {"verification_token": domain_doc["verification_token"]}
 
+# ========== OPENCLAW & N8N AUTOMATION WEBHOOKS ==========
+
+@api_router.post("/webhooks/openclaw/leads")
+async def handle_openclaw_leads(request: Request):
+    """Handle leads from OpenClaw scraping"""
+    try:
+        data = await request.json()
+        leads = data.get('leads', [])
+        
+        processed_leads = []
+        for lead_data in leads:
+            # Create contact in database
+            contact_id = str(uuid.uuid4())
+            contact = {
+                'id': contact_id,
+                'owner_id': lead_data.get('owner_id', 'system'),  # Extract from auth or use system
+                'name': lead_data.get('company_name', ''),
+                'phone': lead_data.get('phone', ''),
+                'email': lead_data.get('email', ''),
+                'company': lead_data.get('company_name', ''),
+                'address': lead_data.get('address', ''),
+                'website': lead_data.get('website', ''),
+                'source': 'OpenClaw Automation',
+                'tags': lead_data.get('tags', ['scraped', 'openclaw']),
+                'notes': f"Auto-generated from OpenClaw scraping on {datetime.now().isoformat()}",
+                'custom': {
+                    'scraping_source': lead_data.get('source', ''),
+                    'scraping_timestamp': datetime.now().isoformat()
+                },
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            # Store in database
+            if USE_MOCK_DB:
+                # For mock database, store in memory
+                if 'contacts' not in globals():
+                    globals()['contacts'] = []
+                globals()['contacts'].append(contact)
+            else:
+                # Store in real MongoDB
+                await db.contacts.insert_one(contact)
+            
+            processed_leads.append(contact)
+            
+            # Log the lead creation
+            logging.info(f"OpenClaw: Created lead {contact['name']} from {contact['source']}")
+        
+        return {
+            "success": True,
+            "processed": len(processed_leads),
+            "leads": processed_leads
+        }
+        
+    except Exception as e:
+        logging.error(f"Error processing OpenClaw leads: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@api_router.post("/webhooks/openclaw/competitor-data")
+async def handle_competitor_data(request: Request):
+    """Handle competitor monitoring data from OpenClaw"""
+    try:
+        data = await request.json()
+        
+        # Store competitor data
+        competitor_update = {
+            'id': str(uuid.uuid4()),
+            'type': data.get('type', 'competitor_update'),
+            'competitor': data.get('competitor'),
+            'data': data.get('data'),
+            'timestamp': data.get('timestamp', datetime.now().timestamp()),
+            'created_at': datetime.now().isoformat(),
+            'owner_id': data.get('owner_id', 'system')
+        }
+        
+        # Store in database
+        if USE_MOCK_DB:
+            if 'competitor_data' not in globals():
+                globals()['competitor_data'] = []
+            globals()['competitor_data'].append(competitor_update)
+        else:
+            await db.competitor_intelligence.insert_one(competitor_update)
+        
+        # Check for significant changes and trigger alerts
+        if await detect_significant_changes(competitor_update):
+            await send_competitor_alert(competitor_update)
+        
+        logging.info(f"OpenClaw: Stored competitor data for {competitor_update['competitor']}")
+        
+        return {"success": True, "stored": True, "id": competitor_update['id']}
+        
+    except Exception as e:
+        logging.error(f"Error processing competitor data: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@api_router.post("/webhooks/n8n/ticket-update")
+async def handle_n8n_ticket_update(request: Request):
+    """Handle ticket updates from n8n workflows"""
+    try:
+        data = await request.json()
+        ticket_id = data.get('ticket_id')
+        updates = data.get('updates', {})
+        
+        if not ticket_id:
+            raise HTTPException(400, "ticket_id is required")
+        
+        # Add timestamp to updates
+        updates['updated_at'] = datetime.now().isoformat()
+        updates['updated_by'] = 'n8n_automation'
+        
+        # Update ticket in database
+        if USE_MOCK_DB:
+            if 'tickets' not in globals():
+                globals()['tickets'] = []
+            for ticket in globals()['tickets']:
+                if ticket['id'] == ticket_id:
+                    ticket.update(updates)
+                    break
+        else:
+            result = await db.tickets.update_one(
+                {"id": ticket_id},
+                {"$set": updates}
+            )
+            if result.matched_count == 0:
+                raise HTTPException(404, f"Ticket {ticket_id} not found")
+        
+        logging.info(f"n8n: Updated ticket {ticket_id} with {len(updates)} fields")
+        
+        return {"success": True, "updated": ticket_id, "fields": list(updates.keys())}
+        
+    except Exception as e:
+        logging.error(f"Error updating ticket from n8n: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@api_router.post("/webhooks/n8n/lead-enrichment")
+async def handle_n8n_lead_enrichment(request: Request):
+    """Handle lead enrichment data from n8n workflows"""
+    try:
+        data = await request.json()
+        contact_id = data.get('contact_id')
+        enrichment_data = data.get('enrichment', {})
+        
+        if not contact_id:
+            raise HTTPException(400, "contact_id is required")
+        
+        # Prepare enrichment updates
+        updates = {
+            'updated_at': datetime.now().isoformat(),
+            'enriched_by': 'n8n_automation',
+            'enriched_at': datetime.now().isoformat()
+        }
+        
+        # Add enriched fields
+        if 'email' in enrichment_data and enrichment_data['email']:
+            updates['email'] = enrichment_data['email']
+        if 'company_size' in enrichment_data:
+            updates['custom.company_size'] = enrichment_data['company_size']
+        if 'industry' in enrichment_data:
+            updates['custom.industry'] = enrichment_data['industry']
+        if 'linkedin_url' in enrichment_data:
+            updates['custom.linkedin_url'] = enrichment_data['linkedin_url']
+        if 'lead_score' in enrichment_data:
+            updates['custom.lead_score'] = enrichment_data['lead_score']
+        
+        # Update contact in database
+        if USE_MOCK_DB:
+            if 'contacts' not in globals():
+                globals()['contacts'] = []
+            for contact in globals()['contacts']:
+                if contact['id'] == contact_id:
+                    contact.update(updates)
+                    break
+        else:
+            result = await db.contacts.update_one(
+                {"id": contact_id},
+                {"$set": updates}
+            )
+            if result.matched_count == 0:
+                raise HTTPException(404, f"Contact {contact_id} not found")
+        
+        logging.info(f"n8n: Enriched contact {contact_id} with {len(enrichment_data)} fields")
+        
+        return {"success": True, "enriched": contact_id, "fields": list(enrichment_data.keys())}
+        
+    except Exception as e:
+        logging.error(f"Error enriching contact from n8n: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+@api_router.get("/automation/stats")
+async def get_automation_stats():
+    """Get automation statistics for dashboard"""
+    try:
+        today = datetime.now().date()
+        today_start = datetime.combine(today, datetime.min.time()).isoformat()
+        
+        stats = {
+            'leads_scraped_today': 0,
+            'workflows_executed_today': 0,
+            'tickets_auto_processed_today': 0,
+            'automation_uptime': '99.9%',
+            'last_scraping_run': None,
+            'active_workflows': 0
+        }
+        
+        if USE_MOCK_DB:
+            # Mock stats for development
+            stats.update({
+                'leads_scraped_today': random.randint(5, 25),
+                'workflows_executed_today': random.randint(10, 50),
+                'tickets_auto_processed_today': random.randint(3, 15),
+                'last_scraping_run': (datetime.now() - timedelta(hours=2)).isoformat(),
+                'active_workflows': 3
+            })
+        else:
+            # Real stats from database
+            leads_today = await db.contacts.count_documents({
+                "source": "OpenClaw Automation",
+                "created_at": {"$gte": today_start}
+            })
+            
+            tickets_today = await db.tickets.count_documents({
+                "updated_by": "n8n_automation",
+                "updated_at": {"$gte": today_start}
+            })
+            
+            stats.update({
+                'leads_scraped_today': leads_today,
+                'tickets_auto_processed_today': tickets_today
+            })
+        
+        return stats
+        
+    except Exception as e:
+        logging.error(f"Error getting automation stats: {str(e)}")
+        return {"error": str(e)}
+
+# Helper functions for automation
+async def detect_significant_changes(competitor_data):
+    """Detect if competitor data contains significant changes"""
+    try:
+        # Simple price change detection
+        data = competitor_data.get('data', {})
+        if 'prices' in data:
+            # In a real implementation, compare with previous data
+            # For now, return False to avoid spam
+            return False
+        return False
+    except Exception:
+        return False
+
+async def send_competitor_alert(competitor_data):
+    """Send alert about competitor changes"""
+    try:
+        # In a real implementation, send email/slack notification
+        logging.info(f"ALERT: Competitor {competitor_data['competitor']} has significant changes")
+        pass
+    except Exception as e:
+        logging.error(f"Error sending competitor alert: {str(e)}")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
