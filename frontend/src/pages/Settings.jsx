@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { toast } from "sonner";
-import { Mail, MessageCircle, Phone, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check, X, ShieldCheck, Key, Webhook, Copy, LifeBuoy, UserPlus, Send, Globe, RefreshCw, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { 
+    Mail, MessageCircle, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check, X,
+    Webhook, Copy, LifeBuoy, Globe, RefreshCw, CheckCircle2, AlertCircle, Info, Key
+} from "lucide-react";
 
 const TABS = [
     { id: "integrations", label: "Integrations", icon: Key },
@@ -198,68 +201,101 @@ const IntegrationsTab = () => {
     };
 
     return (
-        <div className="space-y-4" data-testid="integrations-section">
+        <div className="space-y-6" data-testid="integrations-section">
             {Object.entries(PROVIDER_DEFS).map(([key, def]) => {
                 const cfg = data[key] || { configured: false, config_masked: {} };
                 const Icon = def.icon;
                 return (
-                    <div key={key} className="bg-white border-2 border-ink p-5" data-testid={`integration-card-${key}`}>
-                        <div className="flex items-start justify-between flex-wrap gap-3 mb-3">
-                            <div className="flex items-center gap-3">
-                                <div className={`w-10 h-10 grid place-items-center border-2 border-ink ${cfg.configured ? "bg-brand text-white border-brand" : "bg-bg"}`}>
-                                    <Icon className="w-5 h-5" strokeWidth={2.5} />
+                    <div key={key} className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md hover:shadow-lg transition-all" data-testid={`integration-card-${key}`}>
+                        <div className="flex items-start justify-between flex-wrap gap-4 mb-4">
+                            <div className="flex items-center gap-4">
+                                <div className={`w-12 h-12 rounded-lg flex items-center justify-center shadow-lg ${
+                                    cfg.configured 
+                                        ? "bg-gradient-to-br from-blue-600 to-indigo-600 text-white" 
+                                        : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                                }`}>
+                                    <Icon className="w-6 h-6" strokeWidth={2.5} />
                                 </div>
                                 <div>
-                                    <div className="font-heading font-black text-xl tracking-tighter">{def.label}</div>
-                                    <div className={`text-[10px] font-mono uppercase tracking-widest ${cfg.configured ? "text-ok" : "text-inkSecondary"}`}>
-                                        ● {cfg.configured ? "connected" : "not connected"}
+                                    <div className="text-xl font-bold text-gray-900">{def.label}</div>
+                                    <div className={`text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 ${
+                                        cfg.configured ? "text-green-600" : "text-gray-500"
+                                    }`}>
+                                        <span className={`w-2 h-2 rounded-full ${cfg.configured ? "bg-green-500" : "bg-gray-400"}`}></span>
+                                        {cfg.configured ? "Connected" : "Not Connected"}
                                     </div>
                                 </div>
                             </div>
                             <div className="flex gap-2">
                                 {cfg.configured && (
-                                    <button data-testid={`integration-test-${key}`} onClick={() => test(key)} disabled={testing === key} className="border-2 border-ink px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white disabled:opacity-50">
-                                        {testing === key ? "Testing…" : "Test"}
+                                    <button 
+                                        data-testid={`integration-test-${key}`} 
+                                        onClick={() => test(key)} 
+                                        disabled={testing === key} 
+                                        className="bg-white border-2 border-gray-200 px-4 py-2 rounded-lg text-sm font-semibold hover:shadow-md transition-all disabled:opacity-50 hover:border-gray-300"
+                                    >
+                                        {testing === key ? "Testing..." : "Test"}
                                     </button>
                                 )}
-                                <button data-testid={`integration-edit-${key}`} onClick={() => { setEditing(key); setForm({}); }} className="bg-brand text-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink">
+                                <button 
+                                    data-testid={`integration-edit-${key}`} 
+                                    onClick={() => { setEditing(key); setForm({}); }} 
+                                    className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all"
+                                >
                                     {cfg.configured ? "Edit" : "Connect"}
                                 </button>
                                 {cfg.configured && (
-                                    <button data-testid={`integration-disconnect-${key}`} onClick={() => remove(key)} className="border-2 border-ink px-3 py-1.5 text-[10px] hover:bg-bad hover:text-white hover:border-bad">
-                                        <Trash2 className="w-3 h-3" />
+                                    <button 
+                                        data-testid={`integration-disconnect-${key}`} 
+                                        onClick={() => remove(key)} 
+                                        className="bg-white border-2 border-red-200 text-red-600 px-3 py-2 rounded-lg hover:bg-red-50 hover:border-red-300 transition-all"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
                                     </button>
                                 )}
                             </div>
                         </div>
-                        <p className="text-sm text-inkSecondary mb-3">{def.desc}</p>
+                        <p className="text-sm text-gray-600 mb-4">{def.desc}</p>
                         {cfg.configured && (
-                            <div className="bg-bg border-l-2 border-brand p-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-l-blue-600 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {Object.entries(cfg.config_masked || {}).map(([k, v]) => (
                                     <div key={k} className="font-mono text-xs">
-                                        <span className="text-inkSecondary uppercase tracking-widest">{k}:</span> <span className="text-ink">{v}</span>
+                                        <span className="text-gray-500 uppercase tracking-wider font-semibold">{k}:</span> 
+                                        <span className="text-gray-800 ml-2">{v}</span>
                                     </div>
                                 ))}
                             </div>
                         )}
                         {editing === key && (
-                            <div className="mt-4 bg-bg border-2 border-ink p-4 space-y-3" data-testid={`integration-form-${key}`}>
+                            <div className="mt-6 bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-200 rounded-lg p-6 space-y-4" data-testid={`integration-form-${key}`}>
                                 {def.fields.map((f) => (
                                     <div key={f.key}>
-                                        <label className="text-[11px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">{f.label}</label>
+                                        <label className="text-xs font-semibold uppercase tracking-wider text-gray-600 block mb-2">{f.label}</label>
                                         <input
                                             data-testid={`integration-input-${key}-${f.key}`}
                                             type={f.secret ? "password" : "text"}
                                             placeholder={f.placeholder}
                                             value={form[f.key] || ""}
                                             onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                                            className="w-full bg-white border-2 border-ink px-3 py-2 outline-none focus:border-brand text-sm"
+                                            className="w-full bg-white border-2 border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm shadow-sm hover:border-gray-300 transition-colors"
                                         />
                                     </div>
                                 ))}
-                                <div className="flex gap-2">
-                                    <button data-testid={`integration-save-${key}`} onClick={save} className="bg-brand text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink">Save</button>
-                                    <button data-testid={`integration-cancel-${key}`} onClick={() => { setEditing(null); setForm({}); }} className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white">Cancel</button>
+                                <div className="flex gap-3 pt-2">
+                                    <button 
+                                        data-testid={`integration-save-${key}`} 
+                                        onClick={save} 
+                                        className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all"
+                                    >
+                                        Save
+                                    </button>
+                                    <button 
+                                        data-testid={`integration-cancel-${key}`} 
+                                        onClick={() => { setEditing(null); setForm({}); }} 
+                                        className="bg-white border-2 border-gray-200 px-6 py-3 rounded-lg font-semibold hover:shadow-md transition-all hover:border-gray-300"
+                                    >
+                                        Cancel
+                                    </button>
                                 </div>
                             </div>
                         )}
@@ -273,7 +309,76 @@ const IntegrationsTab = () => {
 // ---------- Domains Tab ----------
 const DomainsTab = () => {
     const { user } = useAuth();
+    const [domains, setDomains] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [newDomain, setNewDomain] = useState('');
+    const [provider, setProvider] = useState('resend');
+    const [selectedDomain, setSelectedDomain] = useState(null);
+    const [verifying, setVerifying] = useState(false);
     const webhookUrl = `${window.location.origin}/api/webhooks/resend/${user?.id}`;
+
+    const loadDomains = async () => {
+        try {
+            const { data } = await api.get('/domains');
+            setDomains(data || []);
+        } catch (error) {
+            console.error('Failed to load domains:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadDomains();
+    }, []);
+
+    const addDomain = async () => {
+        if (!newDomain.trim()) {
+            toast.error('Please enter a domain name');
+            return;
+        }
+
+        try {
+            const { data } = await api.post('/domains', {
+                domain: newDomain.trim(),
+                provider: provider,
+            });
+            toast.success('Domain added! Configure DNS records to verify.');
+            setDomains([data, ...domains]);
+            setNewDomain('');
+            setSelectedDomain(data);
+        } catch (error) {
+            toast.error(error.response?.data?.detail || 'Failed to add domain');
+        }
+    };
+
+    const verifyDomain = async (domain) => {
+        setVerifying(true);
+        try {
+            const { data } = await api.post('/domains/verify', { domain });
+            toast.success(data.verified ? 'Domain verified!' : 'Verification pending. Check DNS records.');
+            loadDomains();
+        } catch (error) {
+            toast.error(error.response?.data?.detail || 'Verification failed');
+        } finally {
+            setVerifying(false);
+        }
+    };
+
+    const deleteDomain = async (domainId) => {
+        if (!window.confirm('Are you sure you want to remove this domain?')) return;
+
+        try {
+            await api.delete(`/domains/${domainId}`);
+            toast.success('Domain removed');
+            setDomains(domains.filter(d => d.id !== domainId));
+            if (selectedDomain?.id === domainId) {
+                setSelectedDomain(null);
+            }
+        } catch (error) {
+            toast.error('Failed to remove domain');
+        }
+    };
 
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text);
@@ -281,9 +386,9 @@ const DomainsTab = () => {
     };
 
     return (
-        <div data-testid="domains-section">
+        <div data-testid="domains-section" className="space-y-6">
             {/* Email Integration Status */}
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-lg p-6 mb-6">
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-xl p-6 shadow-md">
                 <div className="flex items-start gap-4">
                     <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
                         <Mail className="w-6 h-6 text-white" />
@@ -294,23 +399,23 @@ const DomainsTab = () => {
                             Receive emails directly into your CRM. Emails sent to support addresses will automatically create tickets.
                         </p>
                         
-                        <div className="bg-white rounded-lg border border-blue-200 p-4 mb-4">
+                        <div className="bg-white rounded-lg border border-blue-200 p-4 mb-4 shadow-sm">
                             <div className="flex items-center justify-between mb-2">
                                 <span className="text-sm font-semibold text-gray-700">Webhook URL</span>
                                 <button
                                     onClick={() => copyToClipboard(webhookUrl)}
-                                    className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-blue-700 flex items-center gap-1"
+                                    className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:from-blue-700 hover:to-indigo-700 flex items-center gap-1.5 shadow-md hover:shadow-lg transition-all"
                                 >
                                     <Copy className="w-3 h-3" /> Copy
                                 </button>
                             </div>
-                            <code className="text-xs bg-gray-100 px-2 py-1 rounded block break-all font-mono">
+                            <code className="text-xs bg-gray-100 px-3 py-2 rounded-lg block break-all font-mono border">
                                 {webhookUrl}
                             </code>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="bg-white rounded-lg border border-blue-200 p-4">
+                            <div className="bg-white rounded-lg border border-blue-200 p-4 shadow-sm hover:shadow-md transition-shadow">
                                 <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
                                     <CheckCircle2 className="w-4 h-4 text-green-600" />
                                     Easy Setup (Recommended)
@@ -318,7 +423,7 @@ const DomainsTab = () => {
                                 <p className="text-sm text-gray-600 mb-3">
                                     Use Resend's managed email address - no DNS setup required!
                                 </p>
-                                <div className="bg-gray-50 rounded p-3">
+                                <div className="bg-gray-50 rounded-lg p-3 border">
                                     <p className="text-xs font-mono text-gray-700">
                                         Example: support@abc123.resend.app
                                     </p>
@@ -328,7 +433,7 @@ const DomainsTab = () => {
                                 </div>
                             </div>
 
-                            <div className="bg-white rounded-lg border border-blue-200 p-4">
+                            <div className="bg-white rounded-lg border border-blue-200 p-4 shadow-sm hover:shadow-md transition-shadow">
                                 <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
                                     <Globe className="w-4 h-4 text-blue-600" />
                                     Custom Domain
@@ -336,7 +441,7 @@ const DomainsTab = () => {
                                 <p className="text-sm text-gray-600 mb-3">
                                     Use your own domain (e.g., support@yourdomain.com)
                                 </p>
-                                <div className="bg-gray-50 rounded p-3">
+                                <div className="bg-gray-50 rounded-lg p-3 border">
                                     <p className="text-xs text-gray-700">
                                         Requires DNS configuration
                                     </p>
@@ -347,7 +452,7 @@ const DomainsTab = () => {
                             </div>
                         </div>
 
-                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                             <div className="flex items-start gap-2">
                                 <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
                                 <div className="text-sm">
@@ -362,9 +467,191 @@ const DomainsTab = () => {
                 </div>
             </div>
 
-            <div className="bg-white border-2 border-ink p-5">
-                <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Custom Domains</h2>
-                <p className="text-sm text-inkSecondary">Domain management features coming soon. Use the email integration above for immediate setup.</p>
+            {/* Custom Domains Management */}
+            <div className="bg-white border-2 border-gray-200 rounded-xl shadow-md">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-xl">
+                    <h2 className="text-xl font-bold text-gray-900">Custom Email Domains</h2>
+                    <p className="text-sm text-gray-600 mt-1">Configure your own domain to send emails from your business address</p>
+                </div>
+
+                <div className="p-6">
+                    {/* Add Domain Form */}
+                    <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-200 rounded-lg p-6 mb-6">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Add New Domain</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Domain Name</label>
+                                <input
+                                    type="text"
+                                    placeholder="yourbusiness.com"
+                                    value={newDomain}
+                                    onChange={(e) => setNewDomain(e.target.value)}
+                                    className="w-full bg-white border-2 border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm shadow-sm hover:border-gray-300 transition-colors"
+                                />
+                                <p className="text-xs text-gray-600 mt-1">Enter your domain without http:// or www</p>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Email Provider</label>
+                                <select
+                                    value={provider}
+                                    onChange={(e) => setProvider(e.target.value)}
+                                    className="w-full bg-white border-2 border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm hover:border-gray-300 transition-colors"
+                                >
+                                    <option value="resend">Resend (Recommended)</option>
+                                    <option value="sendgrid">SendGrid</option>
+                                    <option value="smtp">Custom SMTP</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button
+                            onClick={addDomain}
+                            className="mt-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                        >
+                            <Plus className="w-4 h-4" />
+                            Add Domain
+                        </button>
+                    </div>
+
+                    {/* Domains List */}
+                    {loading ? (
+                        <div className="text-center py-8">
+                            <RefreshCw className="w-6 h-6 animate-spin mx-auto text-blue-600 mb-2" />
+                            <p className="text-gray-600">Loading domains...</p>
+                        </div>
+                    ) : domains.length === 0 ? (
+                        <div className="text-center py-12">
+                            <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-indigo-200 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                                <Globe className="w-10 h-10 text-blue-600" />
+                            </div>
+                            <h3 className="text-lg font-bold text-gray-900 mb-2">No Custom Domains</h3>
+                            <p className="text-gray-600 mb-4">Add your first custom domain to send emails from your business address</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {domains.map((domain) => (
+                                <div key={domain.id} className="border-2 border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ${
+                                                domain.verified 
+                                                    ? "bg-gradient-to-br from-green-600 to-green-700 text-white" 
+                                                    : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                                            }`}>
+                                                <Globe className="w-5 h-5" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-lg font-bold text-gray-900">{domain.domain}</h4>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                                                        domain.verified 
+                                                            ? "bg-gradient-to-r from-green-50 to-green-100 text-green-700 border-2 border-green-300" 
+                                                            : "bg-gradient-to-r from-yellow-50 to-yellow-100 text-yellow-700 border-2 border-yellow-300"
+                                                    }`}>
+                                                        {domain.verified ? (
+                                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                                        ) : (
+                                                            <AlertCircle className="w-3.5 h-3.5" />
+                                                        )}
+                                                        {domain.verified ? 'Verified' : 'Pending'}
+                                                    </span>
+                                                    <span className="text-xs text-gray-500 uppercase font-semibold tracking-wider">
+                                                        {domain.provider}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => verifyDomain(domain.domain)}
+                                                disabled={verifying}
+                                                className="bg-white border-2 border-gray-200 px-4 py-2 rounded-lg text-sm font-semibold hover:shadow-md transition-all disabled:opacity-50 hover:border-gray-300"
+                                            >
+                                                <RefreshCw className={`w-4 h-4 mr-2 ${verifying ? 'animate-spin' : ''}`} />
+                                                Verify
+                                            </button>
+                                            <button
+                                                onClick={() => setSelectedDomain(selectedDomain?.id === domain.id ? null : domain)}
+                                                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all"
+                                            >
+                                                {selectedDomain?.id === domain.id ? 'Hide' : 'Show'} DNS
+                                            </button>
+                                            <button
+                                                onClick={() => deleteDomain(domain.id)}
+                                                className="bg-white border-2 border-red-200 text-red-600 px-3 py-2 rounded-lg hover:bg-red-50 hover:border-red-300 transition-all"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {selectedDomain?.id === domain.id && domain.dns_records && (
+                                        <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <AlertCircle className="w-5 h-5 text-blue-600" />
+                                                <h5 className="font-semibold text-blue-900">DNS Configuration Required</h5>
+                                            </div>
+                                            <p className="text-sm text-blue-800 mb-4">
+                                                Add these DNS records to your domain registrar (GoDaddy, Namecheap, Cloudflare, etc.)
+                                            </p>
+
+                                            <div className="space-y-4">
+                                                {domain.dns_records.map((record, idx) => (
+                                                    <div key={idx} className="bg-white border border-blue-200 rounded-lg p-4 shadow-sm">
+                                                        <div className="flex items-center justify-between mb-3">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+                                                                    {record.type}
+                                                                </span>
+                                                                <span className="text-sm font-medium text-gray-900">{record.purpose}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                            <div>
+                                                                <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Name/Host</label>
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <code className="text-sm bg-gray-100 px-3 py-2 rounded-lg border flex-1 font-mono">
+                                                                        {record.name}
+                                                                    </code>
+                                                                    <button
+                                                                        onClick={() => copyToClipboard(record.name)}
+                                                                        className="bg-gray-100 hover:bg-gray-200 p-2 rounded-lg transition-colors"
+                                                                    >
+                                                                        <Copy className="w-4 h-4 text-gray-600" />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <div>
+                                                                <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Value</label>
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <code className="text-sm bg-gray-100 px-3 py-2 rounded-lg border flex-1 font-mono truncate">
+                                                                        {record.value}
+                                                                    </code>
+                                                                    <button
+                                                                        onClick={() => copyToClipboard(record.value)}
+                                                                        className="bg-gray-100 hover:bg-gray-200 p-2 rounded-lg transition-colors"
+                                                                    >
+                                                                        <Copy className="w-4 h-4 text-gray-600" />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-4 p-3 bg-blue-100 border border-blue-200 rounded-lg">
+                                                <p className="text-sm text-blue-800">
+                                                    <strong>Next Steps:</strong> After adding these DNS records, click "Verify" to confirm your domain setup. 
+                                                    DNS changes can take up to 24 hours to propagate.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -372,23 +659,53 @@ const DomainsTab = () => {
 
 // Placeholder components for other tabs
 const RolesTab = () => (
-    <div className="bg-white border-2 border-ink p-5">
-        <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Roles & Permissions</h2>
-        <p className="text-sm text-inkSecondary">Role management features available in full version.</p>
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md">
+        <div className="text-center py-12">
+            <div className="w-20 h-20 bg-gradient-to-br from-purple-100 to-purple-200 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <Shield className="w-10 h-10 text-purple-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Roles & Permissions</h2>
+            <p className="text-gray-600 mb-4">Advanced role management features available in the full version.</p>
+            <div className="bg-gradient-to-r from-purple-50 to-purple-100 border border-purple-200 rounded-lg p-4 max-w-md mx-auto">
+                <p className="text-sm text-purple-800">
+                    Configure user roles, permissions, and access controls for your team members.
+                </p>
+            </div>
+        </div>
     </div>
 );
 
 const TeamTab = () => (
-    <div className="bg-white border-2 border-ink p-5">
-        <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Team Management</h2>
-        <p className="text-sm text-inkSecondary">Team management features available in full version.</p>
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md">
+        <div className="text-center py-12">
+            <div className="w-20 h-20 bg-gradient-to-br from-green-100 to-green-200 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <UsersIcon className="w-10 h-10 text-green-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Team Management</h2>
+            <p className="text-gray-600 mb-4">Invite and manage team members with different access levels.</p>
+            <div className="bg-gradient-to-r from-green-50 to-green-100 border border-green-200 rounded-lg p-4 max-w-md mx-auto">
+                <p className="text-sm text-green-800">
+                    Add team members, assign roles, and manage user permissions across your organization.
+                </p>
+            </div>
+        </div>
     </div>
 );
 
 const HelpdeskTab = () => (
-    <div className="bg-white border-2 border-ink p-5">
-        <h2 className="font-heading font-black text-xl tracking-tighter mb-3">Helpdesk Configuration</h2>
-        <p className="text-sm text-inkSecondary">Helpdesk configuration features available in full version.</p>
+    <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md">
+        <div className="text-center py-12">
+            <div className="w-20 h-20 bg-gradient-to-br from-orange-100 to-orange-200 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <LifeBuoy className="w-10 h-10 text-orange-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Helpdesk Configuration</h2>
+            <p className="text-gray-600 mb-4">Configure automated responses, SLA settings, and ticket routing.</p>
+            <div className="bg-gradient-to-r from-orange-50 to-orange-100 border border-orange-200 rounded-lg p-4 max-w-md mx-auto">
+                <p className="text-sm text-orange-800">
+                    Set up business hours, auto-responses, escalation rules, and customer satisfaction surveys.
+                </p>
+            </div>
+        </div>
     </div>
 );
 
@@ -410,24 +727,56 @@ const WebhooksTab = ({ user }) => {
     };
 
     return (
-        <div data-testid="webhooks-section">
-            <h2 className="font-heading font-black text-2xl tracking-tighter mb-2">Webhook URLs</h2>
-            <p className="text-sm text-inkSecondary mb-4">Paste these URLs into your provider's webhook settings to ingest events.</p>
-            <div className="space-y-3">
-                {urls.map((w) => (
-                    <div key={w.id} className="bg-white border-2 border-ink p-4" data-testid={`webhook-${w.id}`}>
-                        <div className="flex items-start justify-between gap-3 flex-wrap">
-                            <div>
-                                <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary">// {w.id}</div>
-                                <div className="font-bold text-sm">{w.label}</div>
+        <div data-testid="webhooks-section" className="space-y-6">
+            <div className="bg-white border-2 border-gray-200 rounded-xl shadow-md">
+                <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-xl">
+                    <h2 className="text-2xl font-bold text-gray-900">Webhook URLs</h2>
+                    <p className="text-sm text-gray-600 mt-1">Paste these URLs into your provider's webhook settings to ingest events.</p>
+                </div>
+                
+                <div className="p-6 space-y-4">
+                    {urls.map((w) => (
+                        <div key={w.id} className="bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow" data-testid={`webhook-${w.id}`}>
+                            <div className="flex items-start justify-between gap-4 flex-wrap">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200 uppercase tracking-wider">
+                                            {w.id}
+                                        </span>
+                                        <h3 className="text-lg font-bold text-gray-900">{w.label}</h3>
+                                    </div>
+                                    <div className="bg-white border border-gray-200 rounded-lg p-3 font-mono text-sm break-all text-gray-700">
+                                        {w.url}
+                                    </div>
+                                </div>
+                                <button 
+                                    data-testid={`webhook-copy-${w.id}`} 
+                                    onClick={() => copy(w.id, w.url)} 
+                                    className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2.5 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2 flex-shrink-0"
+                                >
+                                    {copied === w.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} 
+                                    {copied === w.id ? "Copied" : "Copy"}
+                                </button>
                             </div>
-                            <button data-testid={`webhook-copy-${w.id}`} onClick={() => copy(w.id, w.url)} className="border-2 border-ink px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1">
-                                {copied === w.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />} {copied === w.id ? "Copied" : "Copy"}
-                            </button>
                         </div>
-                        <div className="mt-2 bg-bg border border-line px-3 py-2 font-mono text-xs break-all">{w.url}</div>
+                    ))}
+                </div>
+
+                <div className="px-6 pb-6">
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4">
+                        <div className="flex items-start gap-2">
+                            <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                            <div className="text-sm">
+                                <p className="font-semibold text-blue-900 mb-1">Webhook Setup Instructions</p>
+                                <ul className="text-blue-800 space-y-1 text-xs">
+                                    <li>• <strong>Resend:</strong> Add to Resend dashboard → Webhooks → Create webhook with "email.received" event</li>
+                                    <li>• <strong>WhatsApp:</strong> Configure in Twilio Console → WhatsApp → Sandbox/Production settings</li>
+                                    <li>• <strong>Voice:</strong> Set in Twilio Console → Phone Numbers → Configure webhook URL</li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
-                ))}
+                </div>
             </div>
         </div>
     );
