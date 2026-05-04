@@ -1,0 +1,37 @@
+{
+  "main_domain": {
+    "domain": "billbytekot.in",
+    "timestamp": "2026-05-05T00:24:45.010606",
+    "records": {
+      "TXT": [
+        "google-site-verification=dsvYez1_Rp2vZ1Zxo7T83HaQZBrKa8RQ8mAfoEl5lig",
+        "v=spf1 include:_spf.resend.com ~all"
+      ],
+      "MX": [
+        "10 inbound.resend.com."
+      ],
+      "CNAME": [],
+      "A": [
+        "216.198.79.1"
+      ]
+    }
+  },
+  "subdomains": {
+    "_resend": [
+      "resend-verify=e41414b2-5346-4f"
+    ],
+    "resend._domainkey": [
+      "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCwVECt5ddQRksgdoDfEWTLLCtI0fy69Nri974x5yPPkLmTJjTOXOGQq1+veHvohLrfqxG7mnAgi7FLo9IffYWbCFl8mEc5R6N7uqhica+IEkcAa03nNYgV5DioQfD9sMOHxPdRZrhTjBcwE3jWHL8OmOTyFNs1zmXShA7CjiKn3wIDAQAB"
+    ],
+    "_dmarc": [
+      "_p=none; rua=mailto:dmarc@billbytekot.in",
+      "v=DMARC1; p=none; rua=mailto:dmarc@billbytekot.in"
+    ]
+  },
+  "issues": [
+    "\u274c Missing _resend TXT record with verification token",
+    "\u26a0\ufe0f  DKIM record not found in main domain TXT records (should be in resend._domainkey)",
+    "\u274c Missing DMARC record"
+  ],
+  "timestamp": "2026-05-05T00:24:45.304082"
+}
