@@ -343,74 +343,84 @@ const Emails = () => {
     }
 
     return (
-        <div className="h-screen flex flex-col bg-gray-50">
-            {/* Professional Header with Advanced Features */}
-            <div className="bg-white border-b border-gray-200 shadow-sm">
-                {/* Top Navigation Bar */}
-                <div className="px-4 sm:px-6 py-3 border-b border-gray-100">
+        <div className="h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
+            {/* Enhanced Header with Gradient Background */}
+            <div className="bg-white border-b border-gray-200 shadow-md">
+                {/* Top Navigation with Better Visual Hierarchy */}
+                <div className="px-4 sm:px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-indigo-50">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                         <div className="flex-1">
-                            <div className="flex items-center gap-3">
-                                <Mail className="w-6 h-6 text-blue-600" />
-                                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Email Center</h1>
+                            <div className="flex items-center gap-3 mb-2">
+                                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                                    <Mail className="w-6 h-6 text-white" />
+                                </div>
+                                <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                                    Email Center
+                                </h1>
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-xs sm:text-sm">
-                                <span className="flex items-center gap-1 bg-blue-50 px-2 py-1 rounded-full">
-                                    <Inbox className="w-3 h-3 text-blue-600" />
-                                    <span className="font-semibold">{stats.inbound}</span> Received
+                            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm">
+                                <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200 hover:shadow-md transition-shadow">
+                                    <Inbox className="w-3.5 h-3.5 text-blue-600" />
+                                    <span className="font-semibold text-blue-700">{stats.inbound}</span>
+                                    <span className="text-blue-600">Received</span>
                                 </span>
-                                <span className="flex items-center gap-1 bg-green-50 px-2 py-1 rounded-full">
-                                    <Send className="w-3 h-3 text-green-600" />
-                                    <span className="font-semibold">{stats.outbound}</span> Sent
+                                <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-green-200 hover:shadow-md transition-shadow">
+                                    <Send className="w-3.5 h-3.5 text-green-600" />
+                                    <span className="font-semibold text-green-700">{stats.outbound}</span>
+                                    <span className="text-green-600">Sent</span>
                                 </span>
-                                <span className="flex items-center gap-1 bg-purple-50 px-2 py-1 rounded-full">
-                                    <Calendar className="w-3 h-3 text-purple-600" />
-                                    <span className="font-semibold">{stats.today}</span> Today
+                                <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-purple-200 hover:shadow-md transition-shadow">
+                                    <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                                    <span className="font-semibold text-purple-700">{stats.today}</span>
+                                    <span className="text-purple-600">Today</span>
                                 </span>
                                 {stats.withTickets > 0 && (
-                                    <span className="flex items-center gap-1 bg-orange-50 px-2 py-1 rounded-full">
-                                        <Ticket className="w-3 h-3 text-orange-600" />
-                                        <span className="font-semibold">{stats.withTickets}</span> Tickets
+                                    <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-orange-200 hover:shadow-md transition-shadow">
+                                        <Ticket className="w-3.5 h-3.5 text-orange-600" />
+                                        <span className="font-semibold text-orange-700">{stats.withTickets}</span>
+                                        <span className="text-orange-600">Tickets</span>
                                     </span>
                                 )}
                                 {stats.starred > 0 && (
-                                    <span className="flex items-center gap-1 bg-yellow-50 px-2 py-1 rounded-full">
-                                        <Star className="w-3 h-3 text-yellow-600" />
-                                        <span className="font-semibold">{stats.starred}</span> Starred
+                                    <span className="flex items-center gap-1.5 bg-gradient-to-r from-yellow-400 to-yellow-500 text-white px-3 py-1.5 rounded-full shadow-lg">
+                                        <Star className="w-3.5 h-3.5 fill-white" />
+                                        <span className="font-bold">{stats.starred}</span>
+                                        <span className="font-medium">Starred</span>
                                     </span>
                                 )}
                                 {stats.unread > 0 && (
-                                    <span className="flex items-center gap-1 bg-red-50 px-2 py-1 rounded-full">
-                                        <MailOpen className="w-3 h-3 text-red-600" />
-                                        <span className="font-semibold">{stats.unread}</span> Unread
+                                    <span className="flex items-center gap-1.5 bg-gradient-to-r from-red-500 to-red-600 text-white px-3 py-1.5 rounded-full shadow-lg animate-pulse">
+                                        <MailOpen className="w-3.5 h-3.5" />
+                                        <span className="font-bold">{stats.unread}</span>
+                                        <span className="font-medium">Unread</span>
                                     </span>
                                 )}
-                                <span className="text-gray-500 hidden lg:inline">
-                                    {filteredAndSortedEmails.length} of {stats.total} total
+                                <span className="text-gray-600 hidden lg:inline font-medium">
+                                    {filteredAndSortedEmails.length} of {stats.total} emails
                                 </span>
                             </div>
                         </div>
                         
                         <div className="flex items-center gap-2">
                             {/* View Mode Toggle */}
-                            <div className="hidden sm:flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+                            <div className="hidden sm:flex items-center gap-1 bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
                                 <button
                                     onClick={() => setViewMode("split")}
-                                    className={`p-1.5 rounded ${viewMode === "split" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    className={`p-1.5 rounded transition-all ${viewMode === "split" ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md" : "hover:bg-gray-100"}`}
                                     title="Split View"
                                 >
                                     <Columns className="w-4 h-4" />
                                 </button>
                                 <button
                                     onClick={() => setViewMode("list")}
-                                    className={`p-1.5 rounded ${viewMode === "list" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    className={`p-1.5 rounded transition-all ${viewMode === "list" ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md" : "hover:bg-gray-100"}`}
                                     title="List View"
                                 >
                                     <List className="w-4 h-4" />
                                 </button>
                                 <button
                                     onClick={() => setViewMode("compact")}
-                                    className={`p-1.5 rounded ${viewMode === "compact" ? "bg-white shadow-sm" : "hover:bg-gray-200"}`}
+                                    className={`p-1.5 rounded transition-all ${viewMode === "compact" ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md" : "hover:bg-gray-100"}`}
                                     title="Compact View"
                                 >
                                     <Grid className="w-4 h-4" />
@@ -419,21 +429,25 @@ const Emails = () => {
 
                             <button
                                 onClick={() => setShowFilters(!showFilters)}
-                                className={`p-2 rounded-lg transition-colors ${showFilters ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}
+                                className={`p-2.5 rounded-lg transition-all shadow-sm ${
+                                    showFilters 
+                                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                                        : 'bg-white text-gray-600 hover:text-gray-900 hover:shadow-md border border-gray-200'
+                                }`}
                                 title="Toggle Filters"
                             >
                                 <Filter className="w-4 h-4" />
                             </button>
                             <button
                                 onClick={load}
-                                className="text-gray-500 hover:text-gray-700 p-2 rounded-lg hover:bg-gray-100 transition-colors"
+                                className="bg-white text-gray-600 hover:text-gray-900 p-2.5 rounded-lg hover:shadow-md transition-all border border-gray-200"
                                 title="Refresh"
                             >
                                 <RefreshCw className="w-4 h-4" />
                             </button>
                             <button
                                 onClick={() => setShowComposer(true)}
-                                className="bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 transition-colors shadow-sm text-sm"
+                                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 sm:px-6 py-2.5 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 flex items-center gap-2 transition-all shadow-lg hover:shadow-xl text-sm"
                             >
                                 <Plus className="w-4 h-4" />
                                 <span className="hidden sm:inline">Compose</span>
@@ -442,17 +456,17 @@ const Emails = () => {
                     </div>
                 </div>
 
-                {/* Search and Advanced Filters */}
-                <div className="px-4 sm:px-6 py-3">
+                {/* Search and Advanced Filters with Better Design */}
+                <div className="px-4 sm:px-6 py-4 bg-white">
                     <div className="flex flex-col sm:flex-row gap-3">
                         <div className="relative flex-1">
-                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                             <input
                                 type="text"
                                 placeholder="Search emails, subjects, senders, or content..."
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
-                                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm shadow-sm hover:border-gray-300 transition-colors"
                             />
                         </div>
                         
@@ -578,14 +592,21 @@ const Emails = () => {
                     {/* Email List */}
                     <div className="flex-1 overflow-y-auto">
                         {filteredAndSortedEmails.length === 0 ? (
-                            <div className="p-8 text-center">
-                                <Mail className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                                <h3 className="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
-                                <p className="text-gray-500 mb-4">Send your first email to get started</p>
+                            <div className="flex flex-col items-center justify-center p-12 text-center">
+                                <div className="w-24 h-24 bg-gradient-to-br from-blue-100 to-indigo-200 rounded-2xl flex items-center justify-center mb-6 shadow-lg">
+                                    <Mail className="w-12 h-12 text-blue-600" />
+                                </div>
+                                <h3 className="text-2xl font-bold text-gray-900 mb-2">No Emails Found</h3>
+                                <p className="text-gray-600 mb-6 max-w-md">
+                                    {search || directionFilter !== 'all' || contactFilter !== 'all' || dateFilter !== 'all'
+                                        ? "No emails match your current filters. Try adjusting your search criteria."
+                                        : "Send your first email to get started with your email center."}
+                                </p>
                                 <button
                                     onClick={() => setShowComposer(true)}
-                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700"
+                                    className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
                                 >
+                                    <Plus className="w-5 h-5" />
                                     Compose Email
                                 </button>
                             </div>
@@ -601,8 +622,8 @@ const Emails = () => {
                                     return (
                                         <div
                                             key={email.id}
-                                            className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                                                isSelected ? "bg-blue-50 border-l-4 border-l-blue-600" : ""
+                                            className={`border-b border-gray-100 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer group ${
+                                                isSelected ? "bg-gradient-to-r from-blue-100 to-indigo-100 border-l-4 border-l-blue-600 shadow-md" : ""
                                             } ${isChecked ? "bg-blue-25" : ""} ${isUnread ? "font-semibold" : ""}`}
                                         >
                                             <div className="p-4">

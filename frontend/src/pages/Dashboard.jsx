@@ -4,13 +4,19 @@ import { TrendingUp, Users, ListTodo, Trophy, Sparkles, ArrowRight } from "lucid
 import { toast } from "sonner";
 
 const Stat = ({ label, value, sub, icon: Icon, accent }) => (
-    <div className={`bg-white border-2 border-ink p-5 brutal-hover ${accent ? "border-brand" : ""}`}>
-        <div className="flex items-start justify-between mb-6">
-            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-inkSecondary">{label}</span>
-            <Icon className={`w-4 h-4 ${accent ? "text-brand" : "text-ink"}`} strokeWidth={2.5} />
+    <div className={`bg-white rounded-xl p-6 shadow-md hover:shadow-lg transition-all border-2 ${
+        accent ? "border-blue-300 bg-gradient-to-br from-blue-50 to-indigo-50" : "border-gray-200"
+    }`}>
+        <div className="flex items-start justify-between mb-4">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-600">{label}</span>
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ${
+                accent ? "bg-gradient-to-br from-blue-600 to-indigo-600" : "bg-gray-100"
+            }`}>
+                <Icon className={`w-5 h-5 ${accent ? "text-white" : "text-gray-600"}`} strokeWidth={2.5} />
+            </div>
         </div>
-        <div className="font-heading font-black text-4xl tracking-tighter">{value}</div>
-        {sub && <div className="text-xs font-mono text-inkSecondary mt-2 uppercase tracking-widest">{sub}</div>}
+        <div className="text-3xl font-bold text-gray-900 mb-1">{value}</div>
+        {sub && <div className="text-sm text-gray-600 font-medium">{sub}</div>}
     </div>
 );
 
@@ -42,21 +48,37 @@ const Dashboard = () => {
     const fmt = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n || 0);
 
     return (
-        <div className="p-6 md:p-10 max-w-[1400px]" data-testid="dashboard-page">
-            <div className="flex items-end justify-between mb-8 flex-wrap gap-4">
-                <div>
-                    <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary mb-2">// command center</div>
-                    <h1 className="font-heading font-black text-4xl md:text-5xl tracking-tighter">Dashboard</h1>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            <div className="p-6 md:p-10 max-w-[1400px]" data-testid="dashboard-page">
+                {/* Enhanced Header */}
+                <div className="mb-8">
+                    <div className="bg-white border-b border-gray-200 shadow-md rounded-t-xl">
+                        <div className="px-6 py-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-xl">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                                            <TrendingUp className="w-7 h-7 text-white" />
+                                        </div>
+                                        <h1 className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                                            Dashboard
+                                        </h1>
+                                    </div>
+                                    <p className="text-sm text-gray-600 ml-15">Your command center for business insights</p>
+                                </div>
+                                <button
+                                    data-testid="dashboard-ask-ai-btn"
+                                    onClick={askAI}
+                                    disabled={insightLoading}
+                                    className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 flex items-center gap-2 shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <Sparkles className="w-5 h-5" />
+                                    {insightLoading ? "Thinking..." : "Ask AI: Next Move"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <button
-                    data-testid="dashboard-ask-ai-btn"
-                    onClick={askAI}
-                    disabled={insightLoading}
-                    className="bg-ink text-white px-5 py-3 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-brand transition-all disabled:opacity-50"
-                >
-                    <Sparkles className="w-4 h-4" /> {insightLoading ? "Thinking…" : "Ask agent: next move"}
-                </button>
-            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <Stat label="Pipeline value" value={fmt(stats?.pipeline_value)} sub={`${stats?.open_deals || 0} open deals`} icon={TrendingUp} accent />
@@ -66,41 +88,62 @@ const Dashboard = () => {
             </div>
 
             {/* AI insight panel */}
-            <div className="bg-brand/10 border-2 border-brand p-6 mb-6 relative" data-testid="ai-insight-panel">
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 rounded-xl p-6 mb-6 shadow-md hover:shadow-lg transition-shadow" data-testid="ai-insight-panel">
                 <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-widest">
-                        <span className="w-1.5 h-1.5 bg-brand inline-block animate-pulse"></span>
-                        agent_04 // next_best_action
+                    <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-pink-600 rounded-lg flex items-center justify-center shadow-sm">
+                            <Sparkles className="w-5 h-5 text-white" />
+                        </div>
+                        <span className="text-sm font-semibold text-purple-900">AI Recommendation</span>
                     </div>
-                    <span className="font-mono text-[10px] uppercase tracking-widest text-inkSecondary">claude-sonnet-4.5</span>
+                    <span className="text-xs font-medium text-purple-700 bg-purple-100 px-3 py-1 rounded-full">Claude Sonnet 4.5</span>
                 </div>
                 {insight ? (
-                    <pre className="font-mono text-sm whitespace-pre-wrap leading-relaxed text-ink">{insight}</pre>
+                    <div className="bg-white rounded-lg p-4 border border-purple-200">
+                        <pre className="text-sm whitespace-pre-wrap leading-relaxed text-gray-800 font-sans">{insight}</pre>
+                    </div>
                 ) : (
-                    <p className="text-sm text-inkSecondary">Click <span className="font-bold text-ink">"Ask agent"</span> to get the highest-leverage move based on your live pipeline.</p>
+                    <p className="text-sm text-purple-800">
+                        Click <span className="font-bold">"Ask AI"</span> to get the highest-leverage move based on your live pipeline.
+                    </p>
                 )}
             </div>
 
             {/* Pipeline by stage */}
-            <div className="bg-white border-2 border-ink p-6">
+            <div className="bg-white rounded-xl border-2 border-gray-200 p-6 shadow-md">
                 <div className="flex items-center justify-between mb-6">
-                    <h2 className="font-heading font-black text-2xl tracking-tighter">Pipeline breakdown</h2>
-                    <a href="/app/pipeline" data-testid="dashboard-pipeline-link" className="text-xs font-bold uppercase tracking-widest hover:text-brand inline-flex items-center gap-1">View Kanban <ArrowRight className="w-3 h-3" /></a>
+                    <h2 className="text-2xl font-bold text-gray-900">Pipeline Breakdown</h2>
+                    <a 
+                        href="/app/pipeline" 
+                        data-testid="dashboard-pipeline-link" 
+                        className="text-sm font-semibold text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 hover:gap-2 transition-all"
+                    >
+                        View Kanban <ArrowRight className="w-4 h-4" />
+                    </a>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-px bg-ink border border-ink">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                     {["lead", "qualified", "proposal", "negotiation", "won", "lost"].map((s) => {
                         const v = stats?.by_stage?.[s] || { count: 0, value: 0 };
+                        const colors = {
+                            lead: "from-gray-50 to-gray-100 border-gray-300",
+                            qualified: "from-blue-50 to-blue-100 border-blue-300",
+                            proposal: "from-purple-50 to-purple-100 border-purple-300",
+                            negotiation: "from-yellow-50 to-yellow-100 border-yellow-300",
+                            won: "from-green-50 to-green-100 border-green-300",
+                            lost: "from-red-50 to-red-100 border-red-300"
+                        };
                         return (
-                            <div key={s} className="bg-white p-4">
-                                <div className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary">{s}</div>
-                                <div className="font-heading font-black text-2xl mt-2">{v.count}</div>
-                                <div className="font-mono text-xs text-inkSecondary mt-1">{fmt(v.value)}</div>
+                            <div key={s} className={`bg-gradient-to-br ${colors[s]} border-2 rounded-lg p-4 hover:shadow-md transition-shadow`}>
+                                <div className="text-xs font-semibold uppercase tracking-wider text-gray-600 mb-2">{s}</div>
+                                <div className="text-2xl font-bold text-gray-900 mb-1">{v.count}</div>
+                                <div className="text-sm text-gray-600 font-medium">{fmt(v.value)}</div>
                             </div>
                         );
                     })}
                 </div>
             </div>
         </div>
+    </div>
     );
 };
 

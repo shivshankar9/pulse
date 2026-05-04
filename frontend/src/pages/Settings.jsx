@@ -21,36 +21,61 @@ const Settings = () => {
 
     if (!can("settings.manage") && !can("roles.manage") && !can("users.manage")) {
         return (
-            <div className="p-10" data-testid="settings-denied">
-                <div className="bg-white border-2 border-ink p-8 max-w-md">
-                    <Shield className="w-8 h-8 text-bad mb-4" />
-                    <h1 className="font-heading font-black text-2xl tracking-tighter mb-2">Access denied</h1>
-                    <p className="text-sm text-inkSecondary">Your role ({user?.role_label}) doesn't include settings access. Contact an admin to request access.</p>
+            <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+                <div className="bg-white rounded-xl border-2 border-gray-200 p-8 max-w-md shadow-lg" data-testid="settings-denied">
+                    <div className="text-center">
+                        <div className="w-16 h-16 bg-gradient-to-br from-red-100 to-red-200 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                            <Shield className="w-8 h-8 text-red-600" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
+                        <p className="text-gray-600 mb-4">
+                            Your role ({user?.role_label}) doesn't include settings access.
+                        </p>
+                        <p className="text-sm text-gray-500">
+                            Contact an admin to request access.
+                        </p>
+                    </div>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="p-6 md:p-10 max-w-[1400px]" data-testid="settings-page">
-            <div className="mb-8">
-                <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary mb-2">// admin.console</div>
-                <h1 className="font-heading font-black text-4xl md:text-5xl tracking-tighter">Settings</h1>
-                <p className="text-sm text-inkSecondary mt-2">Configure integrations, manage roles & permissions, and assign team access.</p>
-            </div>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            <div className="p-6 md:p-10 max-w-[1400px]" data-testid="settings-page">
+                {/* Enhanced Header */}
+                <div className="mb-8">
+                    <div className="bg-white border-b border-gray-200 shadow-md rounded-t-xl">
+                        <div className="px-6 py-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-xl">
+                            <div className="flex items-center gap-3 mb-2">
+                                <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                                    <Shield className="w-7 h-7 text-white" />
+                                </div>
+                                <h1 className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                                    Settings
+                                </h1>
+                            </div>
+                            <p className="text-sm text-gray-600 ml-15">Configure integrations, manage roles & permissions, and assign team access.</p>
+                        </div>
+                    </div>
+                </div>
 
-            <div className="flex gap-px bg-ink border border-ink mb-6 w-fit flex-wrap">
-                {TABS.map((t) => (
-                    <button
-                        key={t.id}
-                        data-testid={`settings-tab-${t.id}`}
-                        onClick={() => setTab(t.id)}
-                        className={`px-4 py-2 text-xs font-bold uppercase tracking-widest flex items-center gap-2 ${tab === t.id ? "bg-brand text-white" : "bg-white text-ink hover:bg-bg"}`}
-                    >
-                        <t.icon className="w-3.5 h-3.5" /> {t.label}
-                    </button>
-                ))}
-            </div>
+                <div className="flex flex-wrap gap-1 bg-white rounded-lg p-1 border border-gray-200 shadow-sm mb-6 w-fit">
+                    {TABS.map((t) => (
+                        <button
+                            key={t.id}
+                            data-testid={`settings-tab-${t.id}`}
+                            onClick={() => setTab(t.id)}
+                            className={`px-4 py-2.5 rounded-md text-sm font-semibold flex items-center gap-2 transition-all ${
+                                tab === t.id 
+                                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md" 
+                                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                            }`}
+                        >
+                            <t.icon className="w-4 h-4" /> {t.label}
+                        </button>
+                    ))}
+                </div>
 
             {tab === "integrations" && <IntegrationsTab />}
             {tab === "domains" && <DomainsTab />}
@@ -324,8 +349,92 @@ const DomainsTab = () => {
         return <div className="font-mono text-sm">LOADING…</div>;
     }
 
+    // Get user ID for webhook URL
+    const { user } = useAuth();
+    const webhookUrl = `${window.location.origin}/api/webhooks/resend/${user?.id}`;
+
     return (
         <div data-testid="domains-section">
+            {/* Email Integration Status */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-lg p-6 mb-6">
+                <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                        <Mail className="w-6 h-6 text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <h3 className="text-xl font-bold text-gray-900 mb-2">Email Integration</h3>
+                        <p className="text-gray-700 mb-4">
+                            Receive emails directly into your CRM. Emails sent to support addresses will automatically create tickets.
+                        </p>
+                        
+                        <div className="bg-white rounded-lg border border-blue-200 p-4 mb-4">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-semibold text-gray-700">Webhook URL</span>
+                                <button
+                                    onClick={() => copyToClipboard(webhookUrl)}
+                                    className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-medium hover:bg-blue-700 flex items-center gap-1"
+                                >
+                                    <Copy className="w-3 h-3" /> Copy
+                                </button>
+                            </div>
+                            <code className="text-xs bg-gray-100 px-2 py-1 rounded block break-all font-mono">
+                                {webhookUrl}
+                            </code>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="bg-white rounded-lg border border-blue-200 p-4">
+                                <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                                    <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                    Easy Setup (Recommended)
+                                </h4>
+                                <p className="text-sm text-gray-600 mb-3">
+                                    Use Resend's managed email address - no DNS setup required!
+                                </p>
+                                <div className="bg-gray-50 rounded p-3">
+                                    <p className="text-xs font-mono text-gray-700">
+                                        Example: support@abc123.resend.app
+                                    </p>
+                                    <p className="text-xs text-gray-600 mt-1">
+                                        Get this from your Resend dashboard
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-lg border border-blue-200 p-4">
+                                <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                                    <Globe className="w-4 h-4 text-blue-600" />
+                                    Custom Domain
+                                </h4>
+                                <p className="text-sm text-gray-600 mb-3">
+                                    Use your own domain (e.g., support@yourdomain.com)
+                                </p>
+                                <div className="bg-gray-50 rounded p-3">
+                                    <p className="text-xs text-gray-700">
+                                        Requires DNS configuration below
+                                    </p>
+                                    <p className="text-xs text-gray-600 mt-1">
+                                        Add domain → Configure DNS → Enable receiving
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                            <div className="flex items-start gap-2">
+                                <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-sm">
+                                    <p className="font-medium text-yellow-800">Setup Required</p>
+                                    <p className="text-yellow-700 text-xs mt-1">
+                                        Add the webhook URL above to your Resend dashboard under "Webhooks" with the "email.received" event.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <h2 className="font-heading font-black text-2xl tracking-tighter mb-2">Custom Domains</h2>
             <p className="text-sm text-inkSecondary mb-6">Send emails from your own domain (e.g., hello@yourbusiness.com)</p>
 

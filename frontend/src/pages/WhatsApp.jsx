@@ -436,36 +436,57 @@ const WhatsAppInbox = () => {
     };
 
     return (
-        <div className="flex h-screen bg-gray-50">
+        <div className="flex h-screen bg-gradient-to-br from-gray-50 to-gray-100">
             {/* Left Sidebar - Conversations - Responsive */}
-            <div className={`${selectedPhone ? 'hidden lg:block' : 'block'} w-full lg:w-80 bg-white border-r border-gray-200 flex flex-col`}>
+            <div className={`${selectedPhone ? 'hidden lg:block' : 'block'} w-full lg:w-80 bg-white border-r border-gray-200 flex flex-col shadow-md`}>
                 {/* Header */}
-                <div className="p-4 border-b border-gray-200">
+                <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-green-50 to-emerald-50">
                     <div className="flex items-center justify-between mb-3">
-                        <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                            <MessageCircle className="w-5 h-5 text-green-600" />
-                            WhatsApp
-                        </h1>
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-emerald-600 rounded-lg flex items-center justify-center shadow-lg">
+                                <MessageCircle className="w-6 h-6 text-white" />
+                            </div>
+                            <h1 className="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                                WhatsApp
+                            </h1>
+                        </div>
                         {totalUnread > 0 && (
-                            <span className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium">
-                                {totalUnread}
+                            <span className="flex items-center gap-1.5 bg-gradient-to-r from-green-500 to-green-600 text-white px-3 py-1.5 rounded-full shadow-lg animate-pulse">
+                                <span className="font-bold">{totalUnread}</span>
+                                <span className="font-medium text-xs">Unread</span>
+                            </span>
+                        )}
+                    </div>
+                    
+                    {/* Stats Badges */}
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                        <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-green-200 hover:shadow-md transition-shadow">
+                            <MessageCircle className="w-3.5 h-3.5 text-green-600" />
+                            <span className="font-semibold text-green-700">{conversations.length}</span>
+                            <span className="text-green-600 text-xs">Chats</span>
+                        </span>
+                        {onlineCount > 0 && (
+                            <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200 hover:shadow-md transition-shadow">
+                                <Users className="w-3.5 h-3.5 text-blue-600" />
+                                <span className="font-semibold text-blue-700">{onlineCount}</span>
+                                <span className="text-blue-600 text-xs">Online</span>
                             </span>
                         )}
                     </div>
                     
                     {/* Status Banner */}
                     {!anyConfigured && (
-                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+                        <div className="bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-300 rounded-lg p-3 mb-3 shadow-sm">
                             <div className="flex items-start gap-2">
                                 <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
                                 <div className="text-sm">
-                                    <div className="font-medium text-yellow-800">Test Mode</div>
+                                    <div className="font-semibold text-yellow-800">Test Mode</div>
                                     <div className="text-yellow-700 text-xs mt-1">
                                         Configure WhatsApp Business API in Settings for real messaging.
                                     </div>
                                     <Link 
                                         to="/app/settings" 
-                                        className="text-yellow-800 text-xs font-medium hover:underline mt-1 inline-block"
+                                        className="text-yellow-800 text-xs font-semibold hover:underline mt-1 inline-block"
                                     >
                                         Go to Settings →
                                     </Link>
@@ -476,29 +497,29 @@ const WhatsAppInbox = () => {
 
                     {/* Search */}
                     <div className="relative">
-                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                         <input
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             placeholder="Search conversations..."
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 pl-9 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                            className="w-full bg-white border-2 border-gray-200 rounded-lg px-3 py-3 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent shadow-sm hover:border-gray-300 transition-colors"
                         />
                     </div>
                 </div>
 
                 {/* Actions */}
-                <div className="p-4 border-b border-gray-200">
+                <div className="p-4 border-b border-gray-200 bg-white">
                     <div className="flex gap-2">
                         <button
                             onClick={() => setShowNewConv(true)}
-                            className="flex-1 bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center justify-center gap-2"
+                            className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-3 py-2.5 rounded-lg text-sm font-semibold hover:from-green-700 hover:to-emerald-700 flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-all"
                         >
                             <Plus className="w-4 h-4" />
                             New Chat
                         </button>
                         <button
                             onClick={loadConversations}
-                            className="border border-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
+                            className="bg-white border-2 border-gray-200 px-3 py-2.5 rounded-lg text-sm font-medium hover:shadow-md transition-all"
                         >
                             <RefreshCw className="w-4 h-4" />
                         </button>
@@ -509,14 +530,28 @@ const WhatsAppInbox = () => {
                 <div className="flex-1 overflow-y-auto">
                     {loading ? (
                         <div className="p-6 text-center">
-                            <Loader2 className="w-5 h-5 mx-auto animate-spin text-gray-400" />
+                            <Loader2 className="w-5 h-5 mx-auto animate-spin text-green-600" />
                         </div>
                     ) : filtered.length === 0 ? (
-                        <div className="p-6 text-center">
-                            <MessageCircle className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                            <div className="text-sm text-gray-500">
-                                {search ? "No conversations found" : "No conversations yet"}
+                        <div className="flex flex-col items-center justify-center p-8 text-center">
+                            <div className="w-20 h-20 bg-gradient-to-br from-green-100 to-emerald-200 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
+                                <MessageCircle className="w-10 h-10 text-green-600" />
                             </div>
+                            <h3 className="text-lg font-bold text-gray-900 mb-2">
+                                {search ? "No Conversations Found" : "No Conversations Yet"}
+                            </h3>
+                            <p className="text-sm text-gray-600 mb-4">
+                                {search ? "Try adjusting your search" : "Start a new chat to begin messaging"}
+                            </p>
+                            {!search && (
+                                <button
+                                    onClick={() => setShowNewConv(true)}
+                                    className="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-4 py-2 rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                                >
+                                    <Plus className="w-4 h-4" />
+                                    New Chat
+                                </button>
+                            )}
                         </div>
                     ) : (
                         filtered.map((c) => {
@@ -525,13 +560,13 @@ const WhatsAppInbox = () => {
                                 <button
                                     key={c.phone}
                                     onClick={() => setSelectedPhone(c.phone)}
-                                    className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                                        active ? "bg-green-50 border-l-4 border-l-green-600" : ""
+                                    className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gradient-to-r hover:from-green-50 hover:to-emerald-50 transition-all duration-200 group ${
+                                        active ? "bg-gradient-to-r from-green-100 to-emerald-100 border-l-4 border-l-green-600 shadow-md" : ""
                                     }`}
                                 >
                                     <div className="flex items-start gap-3">
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium ${
-                                            active ? "bg-green-600 text-white" : "bg-gray-200 text-gray-600"
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shadow-sm ${
+                                            active ? "bg-gradient-to-br from-green-600 to-emerald-600 text-white shadow-lg" : "bg-gray-200 text-gray-600 group-hover:bg-gray-300"
                                         }`}>
                                             {initials(c.contact_name, c.phone)}
                                         </div>
@@ -555,7 +590,7 @@ const WhatsAppInbox = () => {
                                                     {c.last_message || "No messages"}
                                                 </div>
                                                 {c.unread > 0 && (
-                                                    <span className="bg-green-600 text-white px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0">
+                                                    <span className="bg-gradient-to-r from-green-500 to-green-600 text-white px-2 py-0.5 rounded-full text-xs font-bold flex-shrink-0 shadow-md">
                                                         {c.unread}
                                                     </span>
                                                 )}
@@ -572,23 +607,23 @@ const WhatsAppInbox = () => {
             {/* Right Side - Chat Area - Responsive */}
             <div className={`${selectedPhone ? 'block' : 'hidden lg:block'} flex-1 flex flex-col`}>
                 {!selectedPhone ? (
-                    <div className="flex-1 flex items-center justify-center bg-gray-50">
-                        <div className="text-center max-w-md">
-                            <div className="w-20 h-20 mx-auto mb-4 bg-green-100 rounded-full flex items-center justify-center">
-                                <MessageCircle className="w-10 h-10 text-green-600" />
+                    <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+                        <div className="text-center max-w-md p-8">
+                            <div className="w-24 h-24 mx-auto mb-6 bg-gradient-to-br from-green-100 to-emerald-200 rounded-2xl flex items-center justify-center shadow-lg">
+                                <MessageCircle className="w-12 h-12 text-green-600" />
                             </div>
-                            <h2 className="text-2xl font-semibold text-gray-900 mb-2">
+                            <h2 className="text-3xl font-bold text-gray-900 mb-3">
                                 WhatsApp Business
                             </h2>
-                            <p className="text-gray-600 mb-4">
+                            <p className="text-gray-600 mb-6 text-lg">
                                 Select a conversation to start messaging, or create a new chat.
                             </p>
                             {!anyConfigured && (
                                 <Link
                                     to="/app/settings"
-                                    className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700"
+                                    className="inline-flex items-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 shadow-lg hover:shadow-xl transition-all"
                                 >
-                                    <SettingsIcon className="w-4 h-4" />
+                                    <SettingsIcon className="w-5 h-5" />
                                     Configure WhatsApp
                                 </Link>
                             )}
@@ -608,7 +643,7 @@ const WhatsAppInbox = () => {
                         </div>
 
                         {/* Chat Header */}
-                        <div className="bg-white border-b border-gray-200 p-4">
+                        <div className="bg-white border-b border-gray-200 p-4 shadow-sm">
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                 <div className="flex items-center gap-3">
                                     <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-sm font-medium text-green-700">

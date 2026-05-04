@@ -118,104 +118,198 @@ const Contacts = () => {
     }, [contacts, search, statusFilter]);
 
     const scoreColor = (s) => {
-        if (s == null) return "text-inkSecondary";
-        if (s >= 70) return "text-brand";
-        if (s >= 40) return "text-warn";
-        return "text-inkSecondary";
+        if (s == null) return "text-gray-500";
+        if (s >= 70) return "text-green-600 font-bold";
+        if (s >= 40) return "text-yellow-600 font-semibold";
+        return "text-gray-500";
     };
 
     return (
-        <div className="p-6 md:p-10 max-w-[1400px]" data-testid="contacts-page">
-            <div className="flex items-end justify-between mb-6 flex-wrap gap-4">
-                <div>
-                    <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary mb-2">// contacts.db</div>
-                    <h1 className="font-heading font-black text-4xl md:text-5xl tracking-tighter">Contacts</h1>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            <div className="p-6 md:p-10 max-w-[1400px]" data-testid="contacts-page">
+                {/* Enhanced Header */}
+                <div className="mb-6">
+                    <div className="bg-white border-b border-gray-200 shadow-md rounded-t-xl">
+                        <div className="px-6 py-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-t-xl">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="w-12 h-12 bg-gradient-to-br from-purple-600 to-pink-600 rounded-lg flex items-center justify-center shadow-lg">
+                                            <Users className="w-7 h-7 text-white" />
+                                        </div>
+                                        <h1 className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                                            Contacts
+                                        </h1>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 ml-15">
+                                        <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-purple-200 hover:shadow-md transition-shadow">
+                                            <Users className="w-3.5 h-3.5 text-purple-600" />
+                                            <span className="font-semibold text-purple-700">{contacts.length}</span>
+                                            <span className="text-purple-600 text-xs">Total</span>
+                                        </span>
+                                        <span className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200 hover:shadow-md transition-shadow">
+                                            <span className="font-semibold text-blue-700">{filtered.length}</span>
+                                            <span className="text-blue-600 text-xs">Filtered</span>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <label data-testid="contacts-import-btn" className="bg-white border-2 border-gray-200 px-4 py-2.5 rounded-lg font-semibold flex items-center gap-2 cursor-pointer hover:shadow-md transition-all text-sm">
+                                        <Upload className="w-4 h-4" /> {importing ? "Importing..." : "Import CSV"}
+                                        <input type="file" accept=".csv" className="hidden" onChange={onImport} disabled={importing} />
+                                    </label>
+                                    <button
+                                        data-testid="contacts-new-btn"
+                                        onClick={() => { setForm(emptyForm); setEditingId(null); setOpen(true); }}
+                                        className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-2.5 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 flex items-center gap-2 shadow-lg hover:shadow-xl transition-all text-sm"
+                                    >
+                                        <Plus className="w-4 h-4" /> New Contact
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                    <label data-testid="contacts-import-btn" className="border-2 border-ink px-4 py-2.5 text-xs font-bold uppercase tracking-widest flex items-center gap-2 cursor-pointer hover:bg-ink hover:text-white transition-all">
-                        <Upload className="w-3.5 h-3.5" /> {importing ? "Importing…" : "Import CSV"}
-                        <input type="file" accept=".csv" className="hidden" onChange={onImport} disabled={importing} />
-                    </label>
-                    <button
-                        data-testid="contacts-new-btn"
-                        onClick={() => { setForm(emptyForm); setEditingId(null); setOpen(true); }}
-                        className="bg-brand text-white px-5 py-2.5 text-xs font-bold uppercase tracking-widest flex items-center gap-2 brutal-shadow hover:bg-ink transition-all"
-                    >
-                        <Plus className="w-4 h-4" /> New contact
-                    </button>
-                </div>
-            </div>
 
             {/* Filters bar */}
-            <div className="bg-white border-2 border-ink p-3 mb-4 flex flex-wrap items-center gap-2" data-testid="contacts-filter-bar">
-                <div className="flex items-center gap-2 flex-1 min-w-[200px] border-2 border-ink bg-bg px-2">
-                    <Search className="w-3.5 h-3.5 text-inkSecondary" />
-                    <input data-testid="contacts-search" placeholder="Search name, email, company…" value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 bg-transparent py-2 outline-none text-sm" />
+            <div className="bg-white rounded-xl border-2 border-gray-200 p-4 mb-4 shadow-sm" data-testid="contacts-filter-bar">
+                <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="relative flex-1">
+                        <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input 
+                            data-testid="contacts-search" 
+                            placeholder="Search name, email, company..." 
+                            value={search} 
+                            onChange={(e) => setSearch(e.target.value)} 
+                            className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm shadow-sm hover:border-gray-300 transition-colors"
+                        />
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2">
+                        <select 
+                            data-testid="contacts-status-filter" 
+                            value={statusFilter} 
+                            onChange={(e) => setStatusFilter(e.target.value)} 
+                            className="bg-white border-2 border-gray-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm font-medium shadow-sm hover:border-gray-300 transition-colors"
+                        >
+                            <option value="all">All Status</option>
+                            {["lead", "qualified", "customer", "lost"].map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                        </select>
+
+                        {views.map((v) => (
+                            <button 
+                                key={v.id} 
+                                data-testid={`view-apply-${v.id}`} 
+                                onClick={() => applyView(v)} 
+                                className="border-2 border-purple-200 bg-purple-50 px-4 py-3 rounded-lg text-sm font-semibold hover:bg-purple-100 hover:border-purple-300 flex items-center gap-2 transition-all shadow-sm"
+                            >
+                                <Bookmark className="w-4 h-4 text-purple-600" /> {v.name}
+                                <X 
+                                    data-testid={`view-delete-${v.id}`} 
+                                    onClick={(e) => { e.stopPropagation(); deleteView(v.id); }} 
+                                    className="w-4 h-4 ml-1 hover:text-red-600 transition-colors" 
+                                />
+                            </button>
+                        ))}
+                        
+                        <button 
+                            data-testid="contacts-save-view-btn" 
+                            onClick={() => setShowSaveView(!showSaveView)} 
+                            className="border-2 border-gray-200 bg-white px-4 py-3 rounded-lg text-sm font-semibold hover:shadow-md transition-all flex items-center gap-2"
+                        >
+                            <Save className="w-4 h-4" /> Save View
+                        </button>
+                    </div>
                 </div>
-                <select data-testid="contacts-status-filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-xs font-bold uppercase tracking-widest">
-                    <option value="all">all status</option>
-                    {["lead", "qualified", "customer", "lost"].map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                {views.map((v) => (
-                    <button key={v.id} data-testid={`view-apply-${v.id}`} onClick={() => applyView(v)} className="border-2 border-ink px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-brand hover:text-white hover:border-brand flex items-center gap-1">
-                        <Bookmark className="w-3 h-3" /> {v.name}
-                        <X data-testid={`view-delete-${v.id}`} onClick={(e) => { e.stopPropagation(); deleteView(v.id); }} className="w-3 h-3 ml-1 hover:text-bad" />
-                    </button>
-                ))}
-                <button data-testid="contacts-save-view-btn" onClick={() => setShowSaveView(!showSaveView)} className="border-2 border-ink px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1">
-                    <Save className="w-3 h-3" /> Save view
-                </button>
+                
                 {showSaveView && (
-                    <div className="flex gap-2 w-full md:w-auto">
-                        <input data-testid="view-name-input" placeholder="View name" value={viewName} onChange={(e) => setViewName(e.target.value)} className="bg-bg border-2 border-ink px-3 py-2 outline-none text-sm" />
-                        <button data-testid="view-save-confirm" onClick={saveView} className="bg-brand text-white px-3 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink">Save</button>
+                    <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200">
+                        <input 
+                            data-testid="view-name-input" 
+                            placeholder="View name" 
+                            value={viewName} 
+                            onChange={(e) => setViewName(e.target.value)} 
+                            className="flex-1 bg-white border-2 border-gray-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+                        />
+                        <button 
+                            data-testid="view-save-confirm" 
+                            onClick={saveView} 
+                            className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-2 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 shadow-md hover:shadow-lg transition-all"
+                        >
+                            Save
+                        </button>
                     </div>
                 )}
             </div>
 
-            <div className="bg-white border-2 border-ink overflow-x-auto">
+            <div className="bg-white rounded-xl border-2 border-gray-200 overflow-hidden shadow-md">
                 <table className="w-full text-sm" data-testid="contacts-table">
                     <thead>
-                        <tr className="border-b-2 border-ink">
+                        <tr className="bg-gradient-to-r from-purple-50 to-pink-50 border-b-2 border-gray-200">
                             {["Name", "Company", "Title", "Status", "Score", "Actions"].map((h) => (
-                                <th key={h} className="text-left px-4 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-inkSecondary">{h}</th>
+                                <th key={h} className="text-left px-6 py-4 text-xs font-semibold uppercase tracking-wider text-gray-700">{h}</th>
                             ))}
                         </tr>
                     </thead>
                     <tbody>
                         {filtered.length === 0 && (
-                            <tr><td colSpan={6} className="px-4 py-12 text-center text-inkSecondary">No contacts match filter.</td></tr>
+                            <tr>
+                                <td colSpan={6} className="px-6 py-16">
+                                    <div className="flex flex-col items-center justify-center text-center">
+                                        <div className="w-20 h-20 bg-gradient-to-br from-purple-100 to-pink-200 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
+                                            <Users className="w-10 h-10 text-purple-600" />
+                                        </div>
+                                        <h3 className="text-lg font-bold text-gray-900 mb-2">No Contacts Found</h3>
+                                        <p className="text-gray-600 mb-4">
+                                            {search || statusFilter !== "all" 
+                                                ? "Try adjusting your filters" 
+                                                : "Add your first contact to get started"}
+                                        </p>
+                                        {!search && statusFilter === "all" && (
+                                            <button
+                                                onClick={() => { setForm(emptyForm); setEditingId(null); setOpen(true); }}
+                                                className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                                            >
+                                                <Plus className="w-5 h-5" />
+                                                Add Contact
+                                            </button>
+                                        )}
+                                    </div>
+                                </td>
+                            </tr>
                         )}
                         {filtered.map((c) => (
-                            <tr key={c.id} className="border-b border-line hover:bg-bg" data-testid={`contact-row-${c.id}`}>
-                                <td className="px-4 py-3 font-bold cursor-pointer" onClick={() => edit(c)}>
+                            <tr key={c.id} className="border-b border-gray-100 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 transition-all duration-200" data-testid={`contact-row-${c.id}`}>
+                                <td className="px-6 py-4 font-semibold cursor-pointer" onClick={() => edit(c)}>
                                     {c.name}
-                                    <div className="text-xs font-normal text-inkSecondary font-mono">{c.email}</div>
+                                    <div className="text-xs font-normal text-gray-600">{c.email}</div>
                                 </td>
-                                <td className="px-4 py-3">{c.company || "—"}</td>
-                                <td className="px-4 py-3 text-inkSecondary">{c.title || "—"}</td>
-                                <td className="px-4 py-3">
-                                    <span className="inline-block border border-ink px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">{c.status}</span>
+                                <td className="px-6 py-4 text-gray-700">{c.company || "—"}</td>
+                                <td className="px-6 py-4 text-gray-600">{c.title || "—"}</td>
+                                <td className="px-6 py-4">
+                                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border-2 bg-gradient-to-r from-gray-50 to-gray-100 border-gray-300 text-gray-700">
+                                        {c.status}
+                                    </span>
                                 </td>
-                                <td className={`px-4 py-3 font-mono font-bold ${scoreColor(c.score)}`}>
+                                <td className={`px-6 py-4 text-lg ${scoreColor(c.score)}`}>
                                     {c.score != null ? c.score : "—"}
                                 </td>
-                                <td className="px-4 py-3">
+                                <td className="px-6 py-4">
                                     <div className="flex gap-2">
                                         <button
                                             data-testid={`contact-score-btn-${c.id}`}
                                             onClick={() => scoreLead(c.id)}
                                             disabled={scoringId === c.id}
-                                            className="border-2 border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-brand hover:text-white hover:border-brand transition-colors flex items-center gap-1 disabled:opacity-50"
+                                            className="border-2 border-purple-200 bg-purple-50 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-purple-100 hover:border-purple-300 transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
                                         >
-                                            <Sparkles className="w-3 h-3" /> {scoringId === c.id ? "…" : "Score"}
+                                            <Sparkles className="w-3.5 h-3.5 text-purple-600" /> {scoringId === c.id ? "..." : "Score"}
                                         </button>
                                         <button
                                             data-testid={`contact-delete-btn-${c.id}`}
                                             onClick={() => remove(c.id)}
-                                            className="border-2 border-ink px-2 py-1 text-[10px] hover:bg-bad hover:text-white hover:border-bad transition-colors"
+                                            className="border-2 border-red-200 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all shadow-sm"
                                         >
-                                            <Trash2 className="w-3 h-3" />
+                                            <Trash2 className="w-3.5 h-3.5 text-red-600" />
                                         </button>
                                     </div>
                                 </td>
