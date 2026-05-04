@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
-import { Plus, Sparkles, Trash2, X, Upload, Search, Save, Bookmark } from "lucide-react";
+import { Plus, Sparkles, Trash2, X, Upload, Search, Save, Bookmark, Users } from "lucide-react";
 import { toast } from "sonner";
 
 const emptyForm = { name: "", email: "", phone: "", company: "", title: "", status: "lead", source: "", notes: "", tags: [] };
@@ -376,6 +376,7 @@ const Contacts = () => {
                 </div>
             )}
         </div>
+    </div>
     );
 };
 
