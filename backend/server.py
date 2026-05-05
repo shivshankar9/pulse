@@ -1119,6 +1119,40 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
             raise
         except Exception as e:
             raise HTTPException(400, f"WhatsApp Business test failed: {str(e)}")
+    
+    if provider in ["smtp", "godaddy_smtp"]:
+        try:
+            import smtplib
+            
+            host = cfg.get("host")
+            port = int(cfg.get("port", 587))
+            username = cfg.get("username")
+            password = cfg.get("password")
+            
+            if not all([host, username, password]):
+                raise HTTPException(400, "Missing required SMTP configuration (host, username, password)")
+            
+            # Test SMTP connection
+            server = smtplib.SMTP(host, port, timeout=10)
+            server.starttls()
+            server.login(username, password)
+            server.quit()
+            
+            return {
+                "ok": True, 
+                "provider": provider,
+                "host": host,
+                "port": port,
+                "username": username,
+                "message": "SMTP connection successful"
+            }
+        except smtplib.SMTPAuthenticationError as e:
+            raise HTTPException(400, f"SMTP authentication failed: {str(e)}")
+        except smtplib.SMTPConnectError as e:
+            raise HTTPException(400, f"SMTP connection failed: {str(e)}")
+        except Exception as e:
+            raise HTTPException(400, f"SMTP test failed: {str(e)}")
+    
     raise HTTPException(400, "Unknown provider")
 
 # ---------- WhatsApp / Voice - Multi-Provider Support ----------
