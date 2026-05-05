@@ -98,7 +98,8 @@ const EmailIntegrationSetup = ({ onComplete }) => {
                 handleTest();
             }, 500);
         } catch (err) {
-            toast.error(err.response?.data?.detail || "Failed to save configuration");
+            const errorMsg = err.response?.data?.detail || err.message || "Failed to save configuration";
+            toast.error(errorMsg);
             setLoading(false);
         }
     };
@@ -107,18 +108,20 @@ const EmailIntegrationSetup = ({ onComplete }) => {
         setLoading(true);
         try {
             const { data } = await api.post(`/integrations/${provider}/test`);
-            setTestResult({ success: true, message: data.account_status || "Connection successful!" });
+            const successMsg = data.account_status || data.info || "Connection successful!";
+            setTestResult({ success: true, message: successMsg });
             toast.success("Email integration verified!");
             setStep(2);
             setTimeout(() => {
                 if (onComplete) onComplete();
             }, 1500);
         } catch (err) {
+            const errorMsg = err.response?.data?.detail || err.message || "Connection failed. Check your credentials.";
             setTestResult({ 
                 success: false, 
-                message: err.response?.data?.detail || "Connection failed. Check your credentials." 
+                message: errorMsg 
             });
-            toast.error("Connection test failed");
+            toast.error(errorMsg);
         } finally {
             setLoading(false);
         }
