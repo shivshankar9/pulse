@@ -128,6 +128,19 @@ const PROVIDER_DEFS = {
             { key: "from_name", label: "From name", placeholder: "Your Company" },
         ],
     },
+    godaddy_smtp: {
+        label: "GoDaddy Email (SMTP)",
+        icon: Mail,
+        desc: "Use GoDaddy Email hosting for professional custom domain emails. Purchase at godaddy.com → Email.",
+        fields: [
+            { key: "host", label: "SMTP Host", placeholder: "smtpout.secureserver.net", defaultValue: "smtpout.secureserver.net" },
+            { key: "port", label: "Port", placeholder: "587", defaultValue: "587" },
+            { key: "username", label: "Email Address", placeholder: "support@billbytekot.in" },
+            { key: "password", label: "Email Password", placeholder: "•••••", secret: true },
+            { key: "from_email", label: "From Email", placeholder: "support@billbytekot.in" },
+            { key: "from_name", label: "From Name", placeholder: "Pulse CRM Support" },
+        ],
+    },
     twilio: {
         label: "Twilio (WhatsApp + Voice)",
         icon: MessageCircle,

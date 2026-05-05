@@ -1013,6 +1013,7 @@ PROVIDER_KEYS = {
     "twilio": ["account_sid", "auth_token", "whatsapp_number", "voice_number"],
     "google": ["client_id", "client_secret", "refresh_token", "calendar_id"],
     "smtp": ["host", "port", "username", "password", "from_email", "from_name"],
+    "godaddy_smtp": ["host", "port", "username", "password", "from_email", "from_name"],
     "sendgrid": ["api_key", "from_email", "from_name"],
     "whatsapp_business": ["access_token", "phone_number_id", "business_account_id"],
     "vonage": ["api_key", "api_secret", "application_id", "private_key"],
@@ -2154,9 +2155,9 @@ async def send_email_advanced(payload: EmailSendIn, user=Depends(require_permiss
             message_id = response.headers.get("X-Message-Id")
             sent_via = "sendgrid"
             
-        elif provider == "smtp":
+        elif provider in ["smtp", "godaddy_smtp"]:
             if not cfg or not cfg.get("host"):
-                raise HTTPException(400, "SMTP not configured")
+                raise HTTPException(400, f"{provider.replace('_', ' ').title()} not configured")
             
             import smtplib
             from email.mime.text import MIMEText

@@ -1,0 +1,53 @@
+RESEND SUPPORT TICKET TEMPLATE
+==============================
+
+Subject: Domain Verification Stuck - DNSSEC Enabled Domain
+
+Hi Resend Support Team,
+
+I need assistance with domain verification for: billbytekot.in
+
+ISSUE SUMMARY:
+- Domain verification stuck at "pending" status
+- All DNS records are correctly configured and globally propagated
+- DNSSEC is enabled on the domain (causing verification delays)
+
+TECHNICAL DETAILS:
+- Domain: billbytekot.in
+- Issue Duration: Multiple attempts over several hours
+- DNS Propagation: 100% globally propagated
+- All Required Records: Present and correct
+
+DNS RECORDS STATUS:
+✅ _resend TXT record: resend-verify=e41414b2-5346-4f
+✅ SPF record: v=spf1 include:_spf.resend.com ~all  
+✅ DKIM record: resend._domainkey.billbytekot.in (full key present)
+✅ DMARC record: v=DMARC1; p=none; rua=mailto:dmarc@billbytekot.in
+✅ MX record: 10 inbound.resend.com.
+
+DNSSEC STATUS:
+❌ DNSSEC: Enabled (2 DNSKEY records, 2 DS records)
+❌ This is likely causing the verification delay
+
+VERIFICATION ATTEMPTS:
+- Multiple "Restart Verification" attempts
+- Waited for DNS propagation (24+ hours)
+- Verified records using multiple DNS checkers
+- All records show as correct and propagated
+
+DELIVERABILITY SCORE: 97.0/100 (Excellent - Ready for production)
+
+REQUEST:
+Please either:
+1. Manually verify the domain (all records are correct)
+2. Provide timeline for DNSSEC domain verification
+3. Suggest alternative verification method
+
+The domain is ready for email sending - only verification is pending.
+
+Thank you for your assistance!
+
+---
+Contact: help@resend.com
+Priority: Normal
+Category: Domain Verification
