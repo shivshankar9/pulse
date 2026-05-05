@@ -133,7 +133,7 @@ const PROVIDER_DEFS = {
         icon: Mail,
         desc: "Use GoDaddy Email hosting for professional custom domain emails. Purchase at godaddy.com → Email.",
         fields: [
-            { key: "host", label: "SMTP Host", placeholder: "smtpout.secureserver.net", defaultValue: "smtpout.secureserver.net" },
+            { key: "host", label: "SMTP Host", placeholder: "smtp.secureserver.net", defaultValue: "smtp.secureserver.net" },
             { key: "port", label: "Port", placeholder: "587", defaultValue: "587" },
             { key: "username", label: "Email Address", placeholder: "support@billbytekot.in" },
             { key: "password", label: "Email Password", placeholder: "•••••", secret: true },
