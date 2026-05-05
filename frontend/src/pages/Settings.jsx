@@ -4,9 +4,10 @@ import api from "../lib/api";
 import { toast } from "sonner";
 import { 
     Mail, MessageCircle, Calendar, Shield, Users as UsersIcon, Plus, Trash2, Check,
-    Webhook, Copy, LifeBuoy, Globe, RefreshCw, CheckCircle2, AlertCircle, Info, Key
+    Webhook, Copy, LifeBuoy, Globe, RefreshCw, CheckCircle2, AlertCircle, Info, Key, Zap
 } from "lucide-react";
 import AutomationSettings from "../components/AutomationSettings";
+import EmailIntegrationSetup from "../components/EmailIntegrationSetup";
 
 const TABS = [
     { id: "integrations", label: "Integrations", icon: Key },
@@ -21,6 +22,7 @@ const TABS = [
 const Settings = () => {
     const { user } = useAuth();
     const [tab, setTab] = useState("integrations");
+    const [showEmailSetup, setShowEmailSetup] = useState(false);
 
     const can = (p) => (user?.permissions || []).includes(p);
 
@@ -47,6 +49,7 @@ const Settings = () => {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+            {showEmailSetup && <EmailIntegrationSetup onComplete={() => setShowEmailSetup(false)} />}
             <div className="p-6 md:p-10 max-w-[1400px]" data-testid="settings-page">
                 {/* Enhanced Header */}
                 <div className="mb-8">
@@ -218,6 +221,28 @@ const IntegrationsTab = () => {
 
     return (
         <div className="space-y-6" data-testid="integrations-section">
+            {/* Quick Email Setup Button */}
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl p-6 shadow-md">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-gradient-to-br from-amber-500 to-orange-600 rounded-lg flex items-center justify-center shadow-lg animate-pulse">
+                            <Zap className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-900">Quick Email Setup</h3>
+                            <p className="text-sm text-gray-600">Get your email integrated in 1 click and receive all support messages</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => setShowEmailSetup(true)}
+                        className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg font-bold hover:from-amber-600 hover:to-orange-700 shadow-lg hover:shadow-xl transition-all whitespace-nowrap flex items-center gap-2"
+                    >
+                        <Zap className="w-4 h-4" />
+                        Setup Email
+                    </button>
+                </div>
+            </div>
+
             {Object.entries(PROVIDER_DEFS).map(([key, def]) => {
                 const cfg = data[key] || { configured: false, config_masked: {} };
                 const Icon = def.icon;

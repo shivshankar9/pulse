@@ -9,6 +9,7 @@ import {
     ArrowUp, ArrowDown, Minus, SortAsc, SortDesc, Grid, List, Columns
 } from "lucide-react";
 import { toast } from "sonner";
+import EmailIntegrationSetup from "../components/EmailIntegrationSetup";
 
 const formatTime = (dateString) => {
     if (!dateString) return "";
@@ -53,6 +54,7 @@ const Emails = () => {
     const [sortOrder, setSortOrder] = useState("desc");
     const [showLabels, setShowLabels] = useState(false);
     const [emailLabels, setEmailLabels] = useState(new Map());
+    const [showEmailSetup, setShowEmailSetup] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -344,6 +346,7 @@ const Emails = () => {
 
     return (
         <div className="h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
+            {showEmailSetup && <EmailIntegrationSetup onComplete={() => setShowEmailSetup(false)} />}
             {/* Enhanced Header with Gradient Background */}
             <div className="bg-white border-b border-gray-200 shadow-md">
                 {/* Top Navigation with Better Visual Hierarchy */}
@@ -444,6 +447,14 @@ const Emails = () => {
                                 title="Refresh"
                             >
                                 <RefreshCw className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={() => setShowEmailSetup(true)}
+                                className="bg-gradient-to-r from-amber-500 to-orange-600 text-white px-4 sm:px-6 py-2.5 rounded-lg font-semibold hover:from-amber-600 hover:to-orange-700 flex items-center gap-2 transition-all shadow-lg hover:shadow-xl text-sm"
+                                title="Quick email setup"
+                            >
+                                <Zap className="w-4 h-4" />
+                                <span className="hidden sm:inline">Setup Email</span>
                             </button>
                             <button
                                 onClick={() => setShowComposer(true)}
