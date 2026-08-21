@@ -20,16 +20,16 @@ const AppShell = () => {
     const navigate = useNavigate();
 
     return (
-        <div className="min-h-screen bg-bg flex">
+        <div className="min-h-screen bg-bg flex selection:bg-brand selection:text-white">
             {/* Sidebar */}
-            <aside className="w-64 bg-white border-r-2 border-ink flex flex-col sticky top-0 h-screen">
-                <div className="p-5 border-b-2 border-ink">
-                    <div className="font-heading font-black text-xl flex items-center gap-2">
-                        <span className="inline-block w-3 h-3 bg-brand"></span> PULSE/CRM
+            <aside className="w-72 bg-surface border-r border-border flex flex-col sticky top-0 h-screen shadow-[8px_0_30px_rgba(23,33,43,0.04)]">
+                <div className="p-6 border-b border-border">
+                    <div className="font-heading font-black text-xl flex items-center gap-3 tracking-tight">
+                        <span className="inline-grid place-items-center size-8 rounded-lg bg-brand text-white text-xs font-mono">P</span> PULSE
                     </div>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-inkSecondary mt-1">v1.0 / operator</div>
+                    <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-inkSecondary mt-2">revenue operations / live</div>
                 </div>
-                <nav className="flex-1 p-3 space-y-1">
+                <nav className="flex-1 p-4 flex flex-col gap-1">
                     {navItems.map(({ to, label, icon: Icon, end, testid, perm }) => {
                         if (perm && !(user?.permissions || []).includes(perm)) return null;
                         return (
@@ -39,10 +39,10 @@ const AppShell = () => {
                                 end={end}
                                 data-testid={testid}
                                 className={({ isActive }) =>
-                                    `flex items-center gap-3 px-3 py-2.5 text-sm font-bold uppercase tracking-wider border-l-2 transition-all ${
+                                        `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold tracking-wide transition-all ${
                                         isActive
-                                            ? "bg-bg border-brand text-ink"
-                                            : "border-transparent text-inkSecondary hover:text-ink hover:bg-bg"
+                                            ? "bg-ink text-white shadow-[3px_3px_0_var(--primary)]"
+                                            : "text-inkSecondary hover:text-ink hover:bg-bg"
                                     }`
                                 }
                             >
