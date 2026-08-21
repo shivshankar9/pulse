@@ -6,39 +6,41 @@
 @tailwind utilities;
 
 :root {
-    --bg: #F5F5F3;
-    --surface: #FFFFFF;
-    --primary: #FF3B00;
-    --primary-hover: #CC2F00;
-    --text: #0A0A0A;
-    --text-secondary: #5C5C5C;
-    --border: #E5E5E5;
-    --ai-bg: #FFF0ED;
-    --success: #008A27;
-    --warning: #FFB800;
-    --danger: #E50000;
+    --bg: #F2F0EA;
+    --surface: #FFFCF7;
+    --primary: #F05A47;
+    --primary-hover: #C94032;
+    --text: #17212B;
+    --text-secondary: #66727D;
+    --border: #D9D6CE;
+    --ai-bg: #E9F0FF;
+    --success: #2C826B;
+    --warning: #D39A3D;
+    --danger: #C94B4B;
+    --blue: #3767D6;
+    --ink-soft: #31404D;
 
     /* Shadcn overrides (kept neutral so brutalist styles dominate) */
-    --background: 60 7% 96%;
-    --foreground: 0 0% 4%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 4%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 4%;
-    --primary: 16 100% 50%;
+    --background: 42 33% 93%;
+    --foreground: 207 28% 13%;
+    --card: 36 100% 99%;
+    --card-foreground: 207 28% 13%;
+    --popover: 36 100% 99%;
+    --popover-foreground: 207 28% 13%;
+    --primary: 7 83% 61%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 96%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 94%;
-    --muted-foreground: 0 0% 36%;
-    --accent: 0 0% 94%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 100% 45%;
+    --secondary: 214 100% 95%;
+    --secondary-foreground: 216 61% 32%;
+    --muted: 40 18% 88%;
+    --muted-foreground: 207 12% 43%;
+    --accent: 214 100% 95%;
+    --accent-foreground: 216 61% 32%;
+    --destructive: 0 52% 54%;
     --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 90%;
-    --input: 0 0% 90%;
-    --ring: 0 0% 4%;
-    --radius: 0px;
+    --border: 39 14% 83%;
+    --input: 39 14% 83%;
+    --ring: 7 83% 61%;
+    --radius: 0.85rem;
 }
 
 * {
