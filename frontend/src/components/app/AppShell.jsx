@@ -25,9 +25,10 @@ const AppShell = () => {
             <aside className="w-72 bg-surface border-r border-border flex flex-col sticky top-0 h-screen shadow-[8px_0_30px_rgba(23,33,43,0.04)]">
                 <div className="p-6 border-b border-border">
                     <div className="font-heading font-black text-xl flex items-center gap-3 tracking-tight">
-                        <span className="inline-grid place-items-center size-8 rounded-lg bg-brand text-white text-xs font-mono">P</span> PULSE
+                        <span className="inline-grid place-items-center size-8 rounded-lg bg-brand text-white text-xs font-mono shadow-[3px_3px_0_var(--blue)]">P</span>
+                        <span>pulse<span className="font-mono text-xs text-inkSecondary">/ops</span></span>
                     </div>
-                    <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-inkSecondary mt-2">revenue operations / live</div>
+                    <div className="text-[10px] font-mono uppercase tracking-[0.22em] text-inkSecondary mt-2">customer operations / live</div>
                 </div>
                 <nav className="flex-1 p-4 flex flex-col gap-1">
                     {navItems.map(({ to, label, icon: Icon, end, testid, perm }) => {
@@ -52,9 +53,10 @@ const AppShell = () => {
                         );
                     })}
                 </nav>
-                <div className="border-t-2 border-ink p-4">
-                    <div className="flex items-center gap-3 mb-3">
-                        <div className="w-9 h-9 bg-ink text-white grid place-items-center font-heading font-bold text-sm">
+                <div className="border-t border-border p-4">
+                    <div className="mb-4 rounded-2xl bg-bg p-3">
+                        <div className="flex items-center gap-3">
+                        <div className="grid size-9 place-items-center rounded-xl bg-ink font-heading text-sm font-bold text-white">
                             {(user?.name || "?").slice(0, 1).toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -62,11 +64,12 @@ const AppShell = () => {
                             <div className="text-[10px] font-mono text-inkSecondary truncate">{user?.email}</div>
                             {user?.role_label && <div className="text-[9px] font-mono uppercase tracking-widest text-brand mt-0.5" data-testid="user-role">● {user.role_label}</div>}
                         </div>
+                        </div>
                     </div>
                     <button
                         data-testid="logout-btn"
                         onClick={() => { logout(); navigate("/"); }}
-                        className="w-full flex items-center justify-center gap-2 border-2 border-ink py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white transition-colors"
+                        className="w-full flex items-center justify-center gap-2 rounded-xl border border-border py-2.5 text-xs font-bold tracking-widest text-inkSecondary transition-colors hover:border-ink hover:bg-ink hover:text-white"
                     >
                         <LogOut className="w-3.5 h-3.5" /> Sign out
                     </button>

@@ -23,6 +23,7 @@ module.exports = {
                 ok: '#2C826B',
                 warn: '#D39A3D',
                 bad: '#C94B4B',
+                blue: '#3767D6',
                 background: 'hsl(var(--background))',
                 foreground: 'hsl(var(--foreground))',
                 card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
