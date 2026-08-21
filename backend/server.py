@@ -3986,8 +3986,15 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
 
     rendered = _render_template(tpl.get("body", ""), payload.params)
 
-    # A Meta template must use Meta's template endpoint; a text fallback is rejected outside the customer window.
-    if (not payload.provider or payload.provider in ("auto", "whatsapp_business")) and tpl.get("meta_template_name"):
+    # Approved templates must use Meta's template endpoint; rendered text is rejected outside
+    # the customer-care window. Older locally-created records may not have meta_template_name,
+    # so use the template name when it is the Meta-approved name (the common case).
+    meta_template_name = tpl.get("meta_template_name") or tpl.get("name")
+    use_meta_template = (
+        (not payload.provider or payload.provider in ("auto", "whatsapp_business"))
+        and bool(meta_template_name)
+    )
+    if use_meta_template:
         cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
         if not cfg or not cfg.get("access_token") or not cfg.get("phone_number_id"):
             raise HTTPException(400, "Meta WhatsApp credentials are required to send an approved template")
@@ -4010,8 +4017,8 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
                     "to": payload.to,
                     "type": "template",
                     "template": {
-                        "name": tpl["meta_template_name"],
-                        "language": {"code": tpl.get("language") or "en_US"},
+                        "name": meta_template_name,
+                        "language": {"code": payload.language or tpl.get("language") or "en_US"},
                         "components": components,
                     },
                 },
