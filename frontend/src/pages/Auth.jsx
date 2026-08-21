@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { ArrowRight } from "lucide-react";
+import { GoogleLogin } from "@react-oauth/google";
 
 const Auth = () => {
     const [params] = useSearchParams();
@@ -11,7 +12,7 @@ const Auth = () => {
     const [password, setPassword] = useState("");
     const [name, setName] = useState("");
     const [loading, setLoading] = useState(false);
-    const { login, register, user } = useAuth();
+    const { login, register, googleLogin, user } = useAuth();
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -30,6 +31,22 @@ const Auth = () => {
             toast.error(err.response?.data?.detail || "Something went wrong");
         }
         setLoading(false);
+    };
+
+    const handleGoogleSuccess = async (credentialResponse) => {
+        setLoading(true);
+        try {
+            await googleLogin(credentialResponse.credential);
+            toast.success("Welcome with Google!");
+            navigate("/app");
+        } catch (err) {
+            toast.error(err.response?.data?.detail || "Google authentication failed");
+        }
+        setLoading(false);
+    };
+
+    const handleGoogleError = () => {
+        toast.error("Google authentication failed");
     };
 
     return (
@@ -112,6 +129,30 @@ const Auth = () => {
                             {loading ? "…" : (mode === "login" ? "Sign in" : "Create account")}
                             <ArrowRight className="w-4 h-4" />
                         </button>
+
+                        {/* Divider */}
+                        <div className="relative my-6">
+                            <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t-2 border-ink"></div>
+                            </div>
+                            <div className="relative flex justify-center text-sm">
+                                <span className="px-2 bg-bg text-inkSecondary font-mono text-[10px] uppercase">or continue with</span>
+                            </div>
+                        </div>
+
+                        {/* Google Sign In */}
+                        <div className="flex justify-center">
+                            {process.env.REACT_APP_GOOGLE_CLIENT_ID && (
+                                <GoogleLogin
+                                    onSuccess={handleGoogleSuccess}
+                                    onError={handleGoogleError}
+                                    text={mode === "login" ? "signin_with" : "signup_with"}
+                                    locale="en"
+                                    theme="outline"
+                                    size="large"
+                                />
+                            )}
+                        </div>
                     </form>
 
                     <div className="mt-6 text-sm text-inkSecondary text-center">

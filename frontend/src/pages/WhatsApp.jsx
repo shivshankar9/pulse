@@ -52,10 +52,13 @@ const WhatsAppInbox = () => {
     const [selectedPhone, setSelectedPhone] = useState(null);
     const [messages, setMessages] = useState([]);
     const [reply, setReply] = useState("");
+    const [mediaUrl, setMediaUrl] = useState("");
+    const [mediaType, setMediaType] = useState("image");
     const [sending, setSending] = useState(false);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [integrations, setIntegrations] = useState({});
+    const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
     const [newPhone, setNewPhone] = useState("");
     const [showNewConv, setShowNewConv] = useState(false);
 
@@ -89,12 +92,14 @@ const WhatsAppInbox = () => {
         try {
             const { data } = await api.get("/integrations");
             setIntegrations(data || {});
+            setIntegrationsLoaded(true);
         } catch (e) {
             // If user doesn't have permission to view integrations (e.g., agents),
             // assume WhatsApp is configured to avoid showing config prompts
             if (e.response?.status === 403) {
                 setIntegrations({ whatsapp_business: { configured: true } });
             }
+            setIntegrationsLoaded(true);
         }
     };
 
@@ -103,7 +108,8 @@ const WhatsAppInbox = () => {
             const { data } = await api.get("/whatsapp/templates");
             setTemplates(data || []);
         } catch (e) {
-            // silent
+            console.error('Failed to load templates:', e);
+            // Silent failure for non-critical data
         }
     };
 
@@ -112,7 +118,8 @@ const WhatsAppInbox = () => {
             const { data } = await api.get("/canned-responses");
             setCannedResponses(data || []);
         } catch (e) {
-            // silent
+            console.error('Failed to load canned responses:', e);
+            // Silent failure for non-critical data
         }
     };
 
@@ -121,7 +128,8 @@ const WhatsAppInbox = () => {
             const { data } = await api.get("/presence");
             setTeam(data || []);
         } catch (e) {
-            // silent
+            console.error('Failed to load team presence:', e);
+            // Silent failure for non-critical data
         }
     };
 
@@ -130,9 +138,8 @@ const WhatsAppInbox = () => {
             const { data } = await api.get("/whatsapp/conversations-v2");
             setConversations(data || []);
         } catch (e) {
-            // silent during polling
-        } finally {
-            setLoading(false);
+            console.error('Failed to load conversations:', e);
+            // Don't show error to user during polling
         }
     };
 
@@ -149,26 +156,54 @@ const WhatsAppInbox = () => {
     };
 
     useEffect(() => {
-        loadIntegrations();
-        loadConversations();
-        loadTemplates();
-        loadCannedResponses();
-        loadTeam();
+        // Load critical data first for faster initial render
+        const loadInitialData = async () => {
+            setLoading(true);
+            try {
+                // Load integrations first to determine test mode status quickly
+                await loadIntegrations();
+                
+                // Load conversations immediately for better UX
+                await loadConversations();
+                
+                // Load other data in background (non-blocking)
+                setTimeout(() => {
+                    Promise.all([
+                        loadTemplates(),
+                        loadCannedResponses(),
+                        loadTeam()
+                    ]).catch(console.error);
+                }, 100);
+                
+            } catch (error) {
+                console.error('Failed to load initial data:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadInitialData();
     }, []);
 
-    // Refresh team presence every 20s so online indicators stay fresh
+    // Refresh team presence every 30s (reduced frequency)
     useEffect(() => {
-        const iv = setInterval(loadTeam, 20000);
+        const iv = setInterval(loadTeam, 30000);
         return () => clearInterval(iv);
     }, []);
 
-    // Poll conversations + active thread
+    // Poll conversations + active thread (reduced frequency for better performance)
     useEffect(() => {
         if (pollRef.current) clearInterval(pollRef.current);
+        
+        // Longer polling interval for better performance
+        const pollInterval = 8000; // 8 seconds instead of 5
+        
         pollRef.current = setInterval(() => {
-            loadConversations();
-            if (selectedPhone) loadThread(selectedPhone);
-        }, POLL_MS);
+            // Only poll if component is visible and user is active
+            if (document.visibilityState === 'visible') {
+                loadConversations();
+                if (selectedPhone) loadThread(selectedPhone);
+            }
+        }, pollInterval);
         return () => { if (pollRef.current) clearInterval(pollRef.current); };
     }, [selectedPhone]);
 
@@ -201,11 +236,15 @@ const WhatsAppInbox = () => {
     );
 
     const anyConfigured = useMemo(() => {
+        // Don't show test mode banner until integrations are loaded
+        if (!integrationsLoaded) {
+            return true; // Assume configured while loading to avoid flickering test mode banner
+        }
         return (
             integrations?.whatsapp_business?.configured ||
             integrations?.twilio?.configured
         );
-    }, [integrations]);
+    }, [integrations, integrationsLoaded]);
 
     // 24-hour window: true if the most recent INBOUND message was within 24h
     const in24hWindow = useMemo(() => {
@@ -221,16 +260,19 @@ const WhatsAppInbox = () => {
     const onlineCount = useMemo(() => team.filter((t) => t.online).length, [team]);
 
     const send = async () => {
-        if (!reply.trim() || !selectedPhone) return;
+        if ((!reply.trim() && !mediaUrl.trim()) || !selectedPhone) return;
         setSending(true);
         try {
             const { data } = await api.post("/whatsapp/send", {
                 to: selectedPhone,
                 body: reply.trim(),
+                media_url: mediaUrl.trim() || null,
+                media_type: mediaUrl.trim() ? mediaType : null,
                 provider: "auto",
                 contact_id: selectedConv?.contact_id || null,
             });
             setReply("");
+            setMediaUrl("");
             setMessages((prev) => [...prev, data]);
             loadConversations();
             if (data.status === "queued") {
@@ -474,8 +516,8 @@ const WhatsAppInbox = () => {
                         )}
                     </div>
                     
-                    {/* Status Banner */}
-                    {!anyConfigured && (
+                    {/* Status Banner - Only show after integrations are loaded */}
+                    {integrationsLoaded && !anyConfigured && (
                         <div className="bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-300 rounded-lg p-3 mb-3 shadow-sm">
                             <div className="flex items-start gap-2">
                                 <AlertCircle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
@@ -530,7 +572,10 @@ const WhatsAppInbox = () => {
                 <div className="flex-1 overflow-y-auto">
                     {loading ? (
                         <div className="p-6 text-center">
-                            <Loader2 className="w-5 h-5 mx-auto animate-spin text-green-600" />
+                            <div className="flex flex-col items-center gap-3">
+                                <Loader2 className="w-6 h-6 animate-spin text-green-600" />
+                                <div className="text-sm text-gray-600">Loading conversations...</div>
+                            </div>
                         </div>
                     ) : filtered.length === 0 ? (
                         <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -618,7 +663,7 @@ const WhatsAppInbox = () => {
                             <p className="text-gray-600 mb-6 text-lg">
                                 Select a conversation to start messaging, or create a new chat.
                             </p>
-                            {!anyConfigured && (
+                            {integrationsLoaded && !anyConfigured && (
                                 <Link
                                     to="/app/settings"
                                     className="inline-flex items-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 shadow-lg hover:shadow-xl transition-all"
@@ -779,9 +824,18 @@ const WhatsAppInbox = () => {
                                                         ? "bg-green-600 text-white"
                                                         : "bg-white text-gray-900 border border-gray-200"
                                                 }`}>
+                                                    {m.media_url && (m.message_type === "image" || /\.(jpg|jpeg|png|webp)(\?|$)/i.test(m.media_url)) && (
+                                                        <img src={m.media_url} alt="WhatsApp attachment" className="max-w-full rounded mb-2" />
+                                                    )}
+                                                    {m.media_url && (m.message_type === "video" || /\.(mp4|mov|webm)(\?|$)/i.test(m.media_url)) && (
+                                                        <video src={m.media_url} controls className="max-w-full rounded mb-2" />
+                                                    )}
                                                     <div className="text-sm whitespace-pre-wrap break-words">
                                                         {m.body}
                                                     </div>
+                                                    {m.media_id && !m.media_url && (
+                                                        <div className="text-xs opacity-75">Media attachment ({m.message_type || "file"})</div>
+                                                    )}
                                                     <div className={`flex items-center gap-1 text-xs mt-1 ${
                                                         outbound ? "text-green-100 justify-end" : "text-gray-500"
                                                     }`}>
@@ -849,7 +903,22 @@ const WhatsAppInbox = () => {
                                 </div>
                                 
                                 {/* Message Input */}
-                                <div className="flex gap-3">
+                                <div className="flex gap-3 flex-wrap">
+                                    <select
+                                        value={mediaType}
+                                        onChange={(e) => setMediaType(e.target.value)}
+                                        className="border border-gray-200 rounded-lg px-2 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                                        title="Media type"
+                                    >
+                                        <option value="image">Image</option>
+                                        <option value="video">Video</option>
+                                    </select>
+                                    <input
+                                        value={mediaUrl}
+                                        onChange={(e) => setMediaUrl(e.target.value)}
+                                        placeholder="Image/video URL (optional)"
+                                        className="w-48 border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                                    />
                                     <textarea
                                         value={reply}
                                         onChange={(e) => setReply(e.target.value)}
@@ -860,7 +929,7 @@ const WhatsAppInbox = () => {
                                     />
                                     <button
                                         onClick={send}
-                                        disabled={sending || !reply.trim()}
+                                        disabled={sending || (!reply.trim() && !mediaUrl.trim())}
                                         className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                                     >
                                         {sending ? (
@@ -872,7 +941,7 @@ const WhatsAppInbox = () => {
                                     </button>
                                 </div>
                             </div>
-                            {!anyConfigured && (
+                            {integrationsLoaded && !anyConfigured && (
                                 <div className="max-w-4xl mx-auto mt-2 text-xs text-gray-500 text-center">
                                     Test mode: Messages will be queued and a simulated reply will arrive shortly
                                 </div>

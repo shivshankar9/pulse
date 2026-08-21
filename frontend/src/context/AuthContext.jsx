@@ -65,13 +65,20 @@ export const AuthProvider = ({ children }) => {
         return data.user;
     };
 
+    const googleLogin = async (idToken) => {
+        const { data } = await api.post("/auth/google", { id_token: idToken });
+        localStorage.setItem("pulse_token", data.token);
+        setUser(data.user);
+        return data.user;
+    };
+
     const logout = () => {
         localStorage.removeItem("pulse_token");
         setUser(null);
     };
 
     return (
-        <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+        <AuthContext.Provider value={{ user, loading, login, register, googleLogin, logout }}>
             {children}
         </AuthContext.Provider>
     );

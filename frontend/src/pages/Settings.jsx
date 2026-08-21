@@ -130,6 +130,7 @@ const PROVIDER_DEFS = {
             { key: "from_email", label: "From email", placeholder: "no-reply@yourdomain.com" },
             { key: "from_name", label: "From name", placeholder: "Your Company" },
         ],
+        renderWarning: true, // Show platform warning
     },
     godaddy_smtp: {
         label: "GoDaddy Email (SMTP)",
@@ -143,6 +144,7 @@ const PROVIDER_DEFS = {
             { key: "from_email", label: "From Email", placeholder: "support@billbytekot.in" },
             { key: "from_name", label: "From Name", placeholder: "Pulse CRM Support" },
         ],
+        renderWarning: true, // Show platform warning
     },
     twilio: {
         label: "Twilio (WhatsApp + Voice)",
@@ -184,6 +186,10 @@ const IntegrationsTab = () => {
     const [form, setForm] = useState({});
     const [testing, setTesting] = useState(null);
 
+    // Detect if we're running on Render (production) where SMTP is blocked
+    const isRenderEnvironment = window.location.hostname.includes('onrender.com') || 
+                               window.location.hostname.includes('render.com');
+
     const load = async () => {
         const { data } = await api.get("/integrations");
         setData(data);
@@ -214,7 +220,19 @@ const IntegrationsTab = () => {
             const { data } = await api.post(`/integrations/${provider}/test`);
             toast.success(`${provider}: ${data.account_status || data.friendly_name || "OK"}`);
         } catch (err) {
-            toast.error("Test failed: " + (err.response?.data?.detail || ""));
+            const errorMsg = err.response?.data?.detail || "";
+            
+            // Special handling for SMTP timeout errors on Render
+            if ((provider === 'smtp' || provider === 'godaddy_smtp') && 
+                isRenderEnvironment && 
+                (errorMsg.includes('timed out') || errorMsg.includes('Network is unreachable'))) {
+                toast.error("SMTP blocked by Render hosting. Use Resend or SendGrid instead.", {
+                    duration: 6000,
+                    description: "Render blocks SMTP connections for security. HTTP-based email services work perfectly."
+                });
+            } else {
+                toast.error("Test failed: " + errorMsg);
+            }
         }
         setTesting(null);
     };
@@ -297,6 +315,24 @@ const IntegrationsTab = () => {
                             </div>
                         </div>
                         <p className="text-sm text-gray-600 mb-4">{def.desc}</p>
+                        
+                        {/* Platform Warning for SMTP providers */}
+                        {def.renderWarning && isRenderEnvironment && (
+                            <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300 rounded-lg p-4 mb-4">
+                                <div className="flex items-start gap-3">
+                                    <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                                    <div className="text-sm">
+                                        <div className="font-semibold text-yellow-800 mb-1">Platform Limitation</div>
+                                        <div className="text-yellow-700 mb-2">
+                                            Render hosting blocks outbound SMTP connections for security. SMTP providers won't work in production.
+                                        </div>
+                                        <div className="text-yellow-800 font-medium">
+                                            ✅ <strong>Recommended:</strong> Use Resend or SendGrid instead - they use HTTP APIs and work perfectly on Render.
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         {cfg.configured && (
                             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-l-blue-600 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {Object.entries(cfg.config_masked || {}).map(([k, v]) => (

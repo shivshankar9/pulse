@@ -20,6 +20,7 @@ import bcrypt
 import jwt
 from cryptography.fernet import Fernet
 from openai import AsyncOpenAI
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -70,6 +71,13 @@ JWT_EXP_DAYS = 7
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 INTEGRATIONS_KEY = os.environ.get('INTEGRATIONS_KEY')
 fernet = Fernet(INTEGRATIONS_KEY.encode()) if INTEGRATIONS_KEY else None
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:3000/auth/google/callback')
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 def encrypt_secret(value: str) -> str:
     if not fernet or not value:
@@ -239,6 +247,15 @@ class TokenOut(BaseModel):
     token: str
     user: dict
 
+class GoogleTokenIn(BaseModel):
+    """Request model for Google token verification"""
+    id_token: Optional[str] = None
+    access_token: Optional[str] = None
+
+class GoogleTokenRefreshIn(BaseModel):
+    """Request model for Google token refresh"""
+    refresh_token: str
+
 class ContactIn(BaseModel):
     name: str
     email: Optional[EmailStr] = None
@@ -353,7 +370,80 @@ async def login(payload: LoginIn):
 async def me(user=Depends(get_current_user)):
     return user
 
-# ---------- Contacts ----------
+# ---------- Google OAuth ----------
+async def verify_google_token(id_token: str) -> dict:
+    """Verify Google ID token and return user info"""
+    try:
+        # Verify token using Google's tokeninfo endpoint (simpler for frontend to backend flow)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://www.googleapis.com/oauth2/v1/tokeninfo",
+                params={"id_token": id_token},
+                timeout=10
+            )
+            if response.status_code != 200:
+                raise HTTPException(status_code=401, detail="Invalid Google token")
+            
+            token_info = response.json()
+            if token_info.get("aud") != GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID:
+                raise HTTPException(status_code=401, detail="Token audience mismatch")
+            
+            return {
+                "email": token_info.get("email"),
+                "name": token_info.get("name"),
+                "picture": token_info.get("picture"),
+                "sub": token_info.get("sub"),
+            }
+    except httpx.RequestError as e:
+        logging.error(f"Google token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Token verification failed")
+
+@api_router.post("/auth/google", response_model=TokenOut)
+async def google_auth(payload: GoogleTokenIn):
+    """Authenticate with Google using ID token from frontend"""
+    if not payload.id_token:
+        raise HTTPException(status_code=400, detail="id_token required")
+    
+    # Verify the Google token
+    google_user = await verify_google_token(payload.id_token)
+    
+    # Check if user exists
+    user = await db.users.find_one({"email": google_user["email"].lower()})
+    
+    if user:
+        # User exists - update last login
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"last_login": now_utc_iso()}}
+        )
+    else:
+        # Create new user
+        user_id = str(uuid.uuid4())
+        user = {
+            "id": user_id,
+            "email": google_user["email"].lower(),
+            "name": google_user["name"],
+            "picture": google_user.get("picture"),
+            "auth_provider": "google",
+            "google_sub": google_user["sub"],
+            "role": "admin",
+            "created_at": now_utc_iso(),
+            "last_login": now_utc_iso(),
+        }
+        await db.users.insert_one(user)
+    
+    # Create JWT token
+    token = create_token(user["id"])
+    user.pop("password_hash", None) if "password_hash" in user else None
+    user.pop("_id", None)
+    user = await _enrich_user_with_role(user)
+    
+    return TokenOut(token=token, user=user)
+
+@api_router.post("/auth/google/callback", response_model=TokenOut)
+async def google_callback(payload: GoogleTokenIn):
+    """Handle Google OAuth callback (same as /auth/google for frontend-based flow)"""
+    return await google_auth(payload)
 @api_router.get("/contacts")
 async def list_contacts(user=Depends(get_current_user)):
     items = await db.contacts.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
@@ -1102,8 +1192,47 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
         except Exception as e:
             raise HTTPException(400, f"Twilio test failed: {str(e)}")
     if provider == "google":
-        # Without performing OAuth flow we just confirm presence
-        return {"ok": bool(cfg.get("client_id") and cfg.get("client_secret")), "provider": "google", "note": "OAuth flow setup required to fully connect"}
+        # Check if OAuth is completed
+        if cfg.get("refresh_token"):
+            try:
+                from google.auth.transport.requests import Request
+                from google.oauth2.credentials import Credentials
+                
+                # Create credentials from stored tokens
+                creds = Credentials(
+                    token=cfg.get("access_token"),
+                    refresh_token=cfg.get("refresh_token"),
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=cfg.get("client_id"),
+                    client_secret=cfg.get("client_secret")
+                )
+                
+                # Test by refreshing token
+                creds.refresh(Request())
+                
+                return {
+                    "ok": True,
+                    "provider": "google",
+                    "user_email": cfg.get("user_email"),
+                    "user_name": cfg.get("user_name"),
+                    "connected_at": cfg.get("connected_at"),
+                    "message": "Google OAuth connected successfully"
+                }
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "provider": "google",
+                    "error": f"OAuth token invalid: {str(e)}",
+                    "message": "Need to re-authenticate with Google"
+                }
+        else:
+            # OAuth not completed
+            return {
+                "ok": False,
+                "provider": "google",
+                "message": "OAuth flow required - click 'Connect with Google' to authenticate",
+                "has_credentials": bool(cfg.get("client_id") and cfg.get("client_secret"))
+            }
     if provider == "whatsapp_business":
         try:
             import requests
@@ -1155,12 +1284,197 @@ async def test_integration(provider: str, user=Depends(require_permission("setti
     
     raise HTTPException(400, "Unknown provider")
 
+# ---------- Google OAuth Integration ----------
+class GoogleOAuthStartIn(BaseModel):
+    redirect_uri: str  # Frontend callback URL
+
+class GoogleOAuthCallbackIn(BaseModel):
+    code: str
+    state: str
+    redirect_uri: str
+
+@api_router.post("/integrations/google/oauth/start")
+async def google_oauth_start(payload: GoogleOAuthStartIn, user=Depends(require_permission("settings.manage"))):
+    """Start Google OAuth flow"""
+    try:
+        from google_auth_oauthlib.flow import Flow
+        import secrets
+        
+        # Get Google OAuth config
+        cfg = await get_decrypted_integration(user["id"], "google")
+        if not cfg or not cfg.get("client_id") or not cfg.get("client_secret"):
+            raise HTTPException(400, "Google OAuth not configured. Add Client ID and Client Secret first.")
+        
+        # Create OAuth flow
+        client_config = {
+            "web": {
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [payload.redirect_uri]
+            }
+        }
+        
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=[
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/calendar',
+                'https://www.googleapis.com/auth/gmail.send'
+            ]
+        )
+        flow.redirect_uri = payload.redirect_uri
+        
+        # Generate state for security
+        state = secrets.token_urlsafe(32)
+        
+        # Store state in database temporarily
+        await db.oauth_states.insert_one({
+            "state": state,
+            "user_id": user["id"],
+            "provider": "google",
+            "redirect_uri": payload.redirect_uri,
+            "created_at": now_utc_iso(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        })
+        
+        # Get authorization URL
+        authorization_url, _ = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true',
+            state=state
+        )
+        
+        return {
+            "authorization_url": authorization_url,
+            "state": state
+        }
+        
+    except Exception as e:
+        raise HTTPException(400, f"OAuth start failed: {str(e)}")
+
+@api_router.post("/integrations/google/oauth/callback")
+async def google_oauth_callback(payload: GoogleOAuthCallbackIn, user=Depends(require_permission("settings.manage"))):
+    """Handle Google OAuth callback"""
+    try:
+        from google_auth_oauthlib.flow import Flow
+        
+        # Verify state
+        state_doc = await db.oauth_states.find_one({
+            "state": payload.state,
+            "user_id": user["id"],
+            "provider": "google"
+        })
+        
+        if not state_doc:
+            raise HTTPException(400, "Invalid or expired OAuth state")
+        
+        # Check expiration
+        expires_at = datetime.fromisoformat(state_doc["expires_at"].replace('Z', '+00:00'))
+        if datetime.now(timezone.utc) > expires_at:
+            raise HTTPException(400, "OAuth state expired")
+        
+        # Get Google OAuth config
+        cfg = await get_decrypted_integration(user["id"], "google")
+        if not cfg:
+            raise HTTPException(400, "Google OAuth configuration not found")
+        
+        # Create OAuth flow
+        client_config = {
+            "web": {
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [payload.redirect_uri]
+            }
+        }
+        
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=[
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/calendar',
+                'https://www.googleapis.com/auth/gmail.send'
+            ]
+        )
+        flow.redirect_uri = payload.redirect_uri
+        
+        # Exchange code for tokens
+        flow.fetch_token(code=payload.code)
+        
+        credentials = flow.credentials
+        
+        # Get user info
+        from googleapiclient.discovery import build
+        service = build('oauth2', 'v2', credentials=credentials)
+        user_info = service.userinfo().get().execute()
+        
+        # Update integration with tokens
+        updated_config = {
+            **cfg,
+            "refresh_token": credentials.refresh_token,
+            "access_token": credentials.token,
+            "user_email": user_info.get("email"),
+            "user_name": user_info.get("name"),
+            "connected_at": now_utc_iso()
+        }
+        
+        # Encrypt and save
+        encrypted_config = {}
+        for k, v in updated_config.items():
+            if k in PROVIDER_KEYS["google"] and v:
+                encrypted_config[k] = encrypt_secret(str(v))
+            elif v:
+                encrypted_config[k] = str(v)
+        
+        await db.integrations.update_one(
+            {"owner_id": user["id"], "provider": "google"},
+            {"$set": {"config": encrypted_config, "updated_at": now_utc_iso()}},
+            upsert=True
+        )
+        
+        # Clean up state
+        await db.oauth_states.delete_one({"_id": state_doc["_id"]})
+        
+        return {
+            "success": True,
+            "user_email": user_info.get("email"),
+            "user_name": user_info.get("name"),
+            "scopes": credentials.scopes
+        }
+        
+    except Exception as e:
+        raise HTTPException(400, f"OAuth callback failed: {str(e)}")
+
+@api_router.get("/integrations/google/profile")
+async def google_get_profile(user=Depends(require_permission("settings.manage"))):
+    """Get connected Google profile info"""
+    try:
+        cfg = await get_decrypted_integration(user["id"], "google")
+        if not cfg or not cfg.get("refresh_token"):
+            raise HTTPException(400, "Google not connected")
+        
+        return {
+            "connected": True,
+            "user_email": cfg.get("user_email"),
+            "user_name": cfg.get("user_name"),
+            "connected_at": cfg.get("connected_at")
+        }
+        
+    except Exception as e:
+        raise HTTPException(400, f"Failed to get profile: {str(e)}")
+
 # ---------- WhatsApp / Voice - Multi-Provider Support ----------
 class WhatsAppSendIn(BaseModel):
     to: str  # E.164 like +15551234567
     body: str
     contact_id: Optional[str] = None
     media_url: Optional[str] = None  # For images/videos
+    media_type: Optional[Literal["image", "video"]] = None
     provider: Optional[Literal["whatsapp_business", "twilio", "vonage", "messagebird", "auto"]] = "auto"
 
 @api_router.post("/whatsapp/send")
@@ -1193,6 +1507,7 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
                     from_=f"whatsapp:{cfg['whatsapp_number']}",
                     to=f"whatsapp:{payload.to}",
                     body=payload.body,
+                    **({"media_url": [payload.media_url]} if payload.media_url else {}),
                 )
                 message_id = msg.sid
                 sent = True
@@ -1259,8 +1574,14 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
                     json={
                         "messaging_product": "whatsapp",
                         "to": payload.to,
-                        "type": "text",
-                        "text": {"body": payload.body}
+                        "type": payload.media_type or ("image" if payload.media_url and payload.media_url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp")) else "video" if payload.media_url else "text"),
+                        **(
+                            {"image": {"link": payload.media_url, "caption": payload.body}}
+                            if payload.media_url and (payload.media_type == "image" or payload.media_url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp")))
+                            else {"video": {"link": payload.media_url, "caption": payload.body}}
+                            if payload.media_url
+                            else {"text": {"body": payload.body}}
+                        )
                     }
                 )
                 if response.status_code == 200:
@@ -1316,6 +1637,8 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
         "to": payload.to,
         "from": cfg.get("whatsapp_number") or cfg.get("phone_number_id"),
         "body": payload.body,
+        "media_url": payload.media_url,
+        "message_type": payload.media_type,
         "message_id": message_id,
         "provider": provider_used,
         "status": "sent",
@@ -1540,9 +1863,28 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                     # Incoming message
                     for message in messages:
                         from_number = message.get("from")
+                        message_type = message.get("type") or "text"
                         text_obj = message.get("text", {})
-                        text = text_obj.get("body", "") if text_obj else ""
+                        media_obj = message.get(message_type, {}) if message_type in ("image", "video", "audio", "document") else {}
+                        text = (text_obj.get("body", "") if text_obj else "") or (media_obj.get("caption", "") if media_obj else "")
+                        if not text and message_type != "text":
+                            text = f"Received {message_type} message"
                         message_id = message.get("id")
+                        media_url = media_obj.get("link") if media_obj else None
+                        if media_obj.get("id") and not media_url:
+                            media_cfg = await get_decrypted_integration(owner_id, "whatsapp_business")
+                            if media_cfg and media_cfg.get("access_token"):
+                                try:
+                                    import requests
+                                    media_response = requests.get(
+                                        f"https://graph.facebook.com/v18.0/{media_obj['id']}",
+                                        headers={"Authorization": f"Bearer {media_cfg['access_token']}"},
+                                        timeout=10,
+                                    )
+                                    if media_response.status_code < 400:
+                                        media_url = media_response.json().get("url")
+                                except Exception as media_error:
+                                    logging.warning(f"Could not resolve WhatsApp media {media_obj['id']}: {media_error}")
                         
                         logging.info(f"📨 Processing inbound message: from={from_number}, text='{text}', id={message_id}")
                         
@@ -1564,6 +1906,9 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
                             "direction": "inbound",
                             "from": from_number,
                             "body": text,
+                            "message_type": message_type,
+                            "media_id": media_obj.get("id") if media_obj else None,
+                            "media_url": media_url,
                             "message_id": message_id,
                             "received_at": now_utc_iso(),
                             "contact_id": contact["id"] if contact else None,
@@ -3641,58 +3986,63 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
 
     rendered = _render_template(tpl.get("body", ""), payload.params)
 
-    # If Meta-approved template + Meta creds present, use the real template API
+    # A Meta template must use Meta's template endpoint; a text fallback is rejected outside the customer window.
     if (not payload.provider or payload.provider in ("auto", "whatsapp_business")) and tpl.get("meta_template_name"):
         cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
-        if cfg and cfg.get("access_token") and cfg.get("phone_number_id"):
-            try:
-                import requests
-                components = []
-                if payload.params:
-                    components.append({
-                        "type": "body",
-                        "parameters": [{"type": "text", "text": str(p)} for p in payload.params],
-                    })
-                r = requests.post(
-                    f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}/messages",
-                    headers={
-                        "Authorization": f"Bearer {cfg['access_token']}",
-                        "Content-Type": "application/json",
+        if not cfg or not cfg.get("access_token") or not cfg.get("phone_number_id"):
+            raise HTTPException(400, "Meta WhatsApp credentials are required to send an approved template")
+        try:
+            import requests
+            components = []
+            if payload.params:
+                components.append({
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(p)} for p in payload.params],
+                })
+            r = requests.post(
+                f"https://graph.facebook.com/v18.0/{cfg['phone_number_id']}/messages",
+                headers={
+                    "Authorization": f"Bearer {cfg['access_token']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "messaging_product": "whatsapp",
+                    "to": payload.to,
+                    "type": "template",
+                    "template": {
+                        "name": tpl["meta_template_name"],
+                        "language": {"code": tpl.get("language") or "en_US"},
+                        "components": components,
                     },
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": payload.to,
-                        "type": "template",
-                        "template": {
-                            "name": tpl["meta_template_name"],
-                            "language": {"code": tpl.get("language") or "en_US"},
-                            "components": components,
-                        },
-                    },
-                    timeout=10,
-                )
-                if r.status_code < 400:
-                    mid = (r.json().get("messages") or [{}])[0].get("id")
-                    doc = {
-                        "id": str(uuid.uuid4()),
-                        "owner_id": user["id"],
-                        "channel": "whatsapp_business",
-                        "direction": "outbound",
-                        "to": payload.to,
-                        "body": rendered,
-                        "message_id": mid,
-                        "provider": "whatsapp_business",
-                        "status": "sent",
-                        "template_id": tpl["id"],
-                        "template_name": tpl["name"],
-                        "contact_id": payload.contact_id,
-                        "sent_at": now_utc_iso(),
-                    }
-                    await db.messages.insert_one(doc)
-                    doc.pop("_id", None)
-                    return doc
-            except Exception as e:
-                logger.warning(f"Meta template send failed, falling back to text: {e}")
+                },
+                timeout=10,
+            )
+            if r.status_code >= 400:
+                detail = r.text[:500]
+                raise HTTPException(r.status_code if r.status_code < 500 else 502, f"Meta rejected template: {detail}")
+            mid = (r.json().get("messages") or [{}])[0].get("id")
+            doc = {
+                "id": str(uuid.uuid4()),
+                "owner_id": user["id"],
+                "channel": "whatsapp_business",
+                "direction": "outbound",
+                "to": payload.to,
+                "body": rendered,
+                "message_id": mid,
+                "provider": "whatsapp_business",
+                "status": "sent",
+                "template_id": tpl["id"],
+                "template_name": tpl["name"],
+                "contact_id": payload.contact_id,
+                "sent_at": now_utc_iso(),
+            }
+            await db.messages.insert_one(doc)
+            doc.pop("_id", None)
+            return doc
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(502, f"Meta template send failed: {str(e)}")
 
     # Fallback: send the rendered body through normal send path (handles mock + other providers)
     send_payload = WhatsAppSendIn(
