@@ -3971,19 +3971,29 @@ async def sync_meta_templates(user=Depends(require_permission("settings.manage")
         body = next((c.get("text", "") for c in meta.get("components", []) if c.get("type") == "BODY"), "")
         header = next((c.get("text") for c in meta.get("components", []) if c.get("type") == "HEADER"), None)
         footer = next((c.get("text") for c in meta.get("components", []) if c.get("type") == "FOOTER"), None)
-        values = {"meta_id": meta.get("id"), "meta_status": meta.get("status"), "status": "approved" if meta.get("status") == "APPROVED" else "pending", "category": (meta.get("category") or "UTILITY").lower(), "language": meta.get("language", "en_US"), "body": body, "header": header, "footer": footer, "updated_at": now_utc_iso()}
+        values = {"meta_id": meta.get("id"), "meta_status": meta.get("status"), "status": "approved" if meta.get("status") == "APPROVED" else "pending", "category": (meta.get("category") or "UTILITY").lower(), "language": meta.get("language", "en_US"), "body": body, "header": header, "footer": footer, "meta_components": meta.get("components") or [], "updated_at": now_utc_iso()}
         await db.whatsapp_templates.update_one({"owner_id": user["id"], "name": meta.get("name")}, {"$set": {**values, "meta_template_name": meta.get("name")}, "$setOnInsert": {"id": str(uuid.uuid4()), "owner_id": user["id"], "created_at": now_utc_iso()}}, upsert=True)
         synced.append({"name": meta.get("name"), "status": meta.get("status"), "id": meta.get("id")})
     return {"ok": True, "templates": synced, "count": len(synced)}
 
 
 def _count_params(body: str) -> int:
-    """Count {{1}}, {{2}}, ... placeholders in a template body."""
+    """Count the highest numbered Meta placeholder in one component."""
     import re
     matches = re.findall(r"\{\{(\d+)\}\}", body or "")
-    if not matches:
-        return 0
-    return max(int(m) for m in matches)
+    return max((int(m) for m in matches), default=0)
+
+
+def _template_param_count(template: dict) -> int:
+    """Use the approved component definition, falling back to local fields."""
+    components = template.get("meta_components") or []
+    if components:
+        return max((_count_params(c.get("text", "")) for c in components), default=0)
+    return max(
+        _count_params(template.get("header", "")),
+        _count_params(template.get("body", "")),
+        _count_params(template.get("footer", "")),
+    )
 
 
 def _render_template(body: str, params: List[str]) -> str:
@@ -3997,7 +4007,7 @@ def _render_template(body: str, params: List[str]) -> str:
 async def list_templates(user=Depends(get_current_user)):
     items = await db.whatsapp_templates.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
     for it in items:
-        it["param_count"] = _count_params(it.get("body", ""))
+        it["param_count"] = _template_param_count(it)
     return items
 
 
@@ -4104,9 +4114,32 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
     if not tpl:
         raise HTTPException(404, "Template not found")
 
-    expected = int(tpl.get("param_count") or _count_params(tpl.get("body", "")))
+    # Approved templates are authoritative in Meta. Refresh the component definition
+    # before validating values so stale local records cannot create extra parameters.
+    if tpl.get("meta_template_name") or tpl.get("meta_status") == "APPROVED":
+        cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+        waba_id = (cfg.get("waba_id") or cfg.get("business_account_id") or cfg.get("whatsapp_business_account_id")) if cfg else None
+        if cfg and cfg.get("access_token") and waba_id:
+            try:
+                import requests
+                meta_response = requests.get(
+                    f"https://graph.facebook.com/v18.0/{waba_id}/message_templates",
+                    headers={"Authorization": f"Bearer {cfg['access_token']}"},
+                    params={"name": tpl.get("meta_template_name") or tpl.get("name"), "limit": 50},
+                    timeout=10,
+                )
+                if meta_response.ok:
+                    live = next((item for item in meta_response.json().get("data", []) if item.get("name") == (tpl.get("meta_template_name") or tpl.get("name"))), None)
+                    if live:
+                        tpl["meta_components"] = live.get("components") or []
+                        tpl["param_count"] = _template_param_count(tpl)
+                        await db.whatsapp_templates.update_one({"id": tpl["id"], "owner_id": user["id"]}, {"$set": {"meta_components": tpl["meta_components"], "param_count": tpl["param_count"], "meta_status": live.get("status"), "status": "approved" if live.get("status") == "APPROVED" else tpl.get("status")}})
+            except Exception as exc:
+                logging.warning(f"Could not refresh Meta template definition: {exc}")
+
+    expected = _template_param_count(tpl)
     if expected != len(payload.params):
-        raise HTTPException(400, f"Template expects {expected} parameter(s); got {len(payload.params)}")
+        raise HTTPException(400, f"Template expects {expected} parameter(s); got {len(payload.params)}. Sync templates from Meta and use the approved variables.")
 
     rendered = _render_template(tpl.get("body", ""), payload.params)
 
@@ -4150,6 +4183,14 @@ async def send_template(payload: WhatsAppTemplateSendIn, user=Depends(require_pe
             )
             if r.status_code >= 400:
                 detail = r.text[:500]
+                try:
+                    error_payload = r.json().get("error", {})
+                    if error_payload.get("code") == 132000:
+                        raise HTTPException(400, "Meta rejected this template because the approved variable count differs. Click Sync from Meta, reopen the template, and enter only the approved values.")
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
                 raise HTTPException(r.status_code if r.status_code < 500 else 502, f"Meta rejected template: {detail}")
             mid = (r.json().get("messages") or [{}])[0].get("id")
             doc = {
