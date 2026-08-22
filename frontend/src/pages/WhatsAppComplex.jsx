@@ -71,7 +71,9 @@ const WhatsAppInbox = () => {
     const [selectedTemplate, setSelectedTemplate] = useState(null);
     const [templateParams, setTemplateParams] = useState([]);
     const [editingTemplate, setEditingTemplate] = useState(null);
-    const [templateForm, setTemplateForm] = useState({ name: "", category: "utility", language: "en_US", body: "", meta_template_name: "" });
+    const [templateForm, setTemplateForm] = useState({ name: "", category: "utility", language: "en_US", body: "", header: "", footer: "", meta_template_name: "" });
+    const [metaSubmitting, setMetaSubmitting] = useState(false);
+    const [metaSyncing, setMetaSyncing] = useState(false);
 
     // Team presence + assignment
     const [team, setTeam] = useState([]);
@@ -348,6 +350,25 @@ const WhatsAppInbox = () => {
         }
     };
 
+    const submitTemplateToMeta = async () => {
+        const { name, category, language, body, header, footer } = templateForm;
+        if (!name.trim() || !body.trim()) return toast.error("Name and body are required");
+        setMetaSubmitting(true);
+        try {
+            await api.post("/whatsapp/templates/meta", { name, category: category.toUpperCase(), language, body, header: header || null, footer: footer || null });
+            toast.success("Submitted to Meta for approval");
+            loadTemplates();
+        } catch (e) { toast.error(e.response?.data?.detail || "Meta submission failed"); }
+        finally { setMetaSubmitting(false); }
+    };
+
+    const syncMetaTemplates = async () => {
+        setMetaSyncing(true);
+        try { const { data } = await api.post("/whatsapp/templates/meta/sync"); toast.success(`Synced ${data.count} Meta templates`); loadTemplates(); }
+        catch (e) { toast.error(e.response?.data?.detail || "Meta sync failed"); }
+        finally { setMetaSyncing(false); }
+    };
+
     const saveTemplate = async () => {
         const { name, category, language, body, meta_template_name } = templateForm;
         if (!name.trim() || !body.trim()) {
@@ -356,14 +377,14 @@ const WhatsAppInbox = () => {
         }
         try {
             if (editingTemplate) {
-                await api.put(`/whatsapp/templates/${editingTemplate.id}`, { name, category, language, body, meta_template_name: meta_template_name || null });
+                await api.put(`/whatsapp/templates/${editingTemplate.id}`, { name, category, language, body, header: templateForm.header || null, footer: templateForm.footer || null, meta_template_name: meta_template_name || null });
                 toast.success("Template updated");
             } else {
-                await api.post("/whatsapp/templates", { name, category, language, body, meta_template_name: meta_template_name || null });
+                await api.post("/whatsapp/templates", { name, category, language, body, header: templateForm.header || null, footer: templateForm.footer || null, meta_template_name: meta_template_name || null });
                 toast.success("Template created");
             }
             setEditingTemplate(null);
-            setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", meta_template_name: "" });
+            setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", header: "", footer: "", meta_template_name: "" });
             loadTemplates();
         } catch (e) {
             toast.error(e.response?.data?.detail || "Save failed");
@@ -377,6 +398,8 @@ const WhatsAppInbox = () => {
             category: t.category || "utility",
             language: t.language || "en_US",
             body: t.body || "",
+            header: t.header || "",
+            footer: t.footer || "",
             meta_template_name: t.meta_template_name || "",
         });
     };
@@ -599,7 +622,7 @@ const WhatsAppInbox = () => {
                         </button>
                         <button
                             data-testid="wa-manage-templates"
-                            onClick={() => { loadTemplates(); setShowTemplateManager(true); setEditingTemplate(null); setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", meta_template_name: "" }); }}
+                            onClick={() => { loadTemplates(); setShowTemplateManager(true); setEditingTemplate(null); setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", header: "", footer: "", meta_template_name: "" }); }}
                             className="border-2 border-ink px-3 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white"
                             title="Manage templates"
                         >
@@ -964,8 +987,13 @@ const WhatsAppInbox = () => {
                                 >
                                     <BookTemplate className="w-4 h-4" /> Template
                                 </button>
-                                <textarea
-                                    data-testid="wa-reply-input"
+  <div className="flex flex-wrap gap-2 mb-2">
+  {templates.filter((t) => t.status === "approved" || t.meta_status === "APPROVED" || t.meta_template_name).slice(0, 4).map((t) => (
+  <button key={t.id} type="button" onClick={() => { setSelectedTemplate(t); setTemplateParams(Array(t.param_count || 0).fill("")); setShowTemplatePicker(true); }} className="rounded-full border border-brand/40 bg-brand/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-brand hover:bg-brand hover:text-white">{t.name.replaceAll("_", " ")}</button>
+  ))}
+  </div>
+  <textarea
+  data-testid="wa-reply-input"
                                     value={reply}
                                     onChange={(e) => setReply(e.target.value)}
                                     onKeyDown={handleKey}
@@ -1156,7 +1184,7 @@ const WhatsAppInbox = () => {
                                     </div>
                                 ) : (
                                     <div className="space-y-2" data-testid="wa-template-list">
-                                        {templates.map((t) => (
+                                        {templates.filter((t) => t.status === "approved" || t.meta_status === "APPROVED" || t.meta_template_name).map((t) => (
                                             <button
                                                 key={t.id}
                                                 data-testid={`wa-template-pick-${t.name}`}
@@ -1259,9 +1287,9 @@ const WhatsAppInbox = () => {
                                 <div className="text-[11px] font-mono uppercase tracking-widest text-inkSecondary mb-3">
                                     {editingTemplate ? `editing · ${editingTemplate.name}` : "create new"}
                                 </div>
-                                <div className="space-y-3">
+                                                <div className="space-y-3">
                                     <div>
-                                        <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Name</label>
+                                            <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Meta name</label>
                                         <input
                                             data-testid="wa-tpl-name"
                                             value={templateForm.name}
@@ -1296,6 +1324,10 @@ const WhatsAppInbox = () => {
                                         </div>
                                     </div>
                                     <div>
+                                        <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Header (optional)</label>
+                                        <input value={templateForm.header} onChange={(e) => setTemplateForm({ ...templateForm, header: e.target.value })} placeholder="Hi {{1}}," className="w-full border-2 border-ink bg-white px-3 py-2 text-sm outline-none focus:border-brand" />
+                                    </div>
+                                    <div>
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">
                                             Body — use {`{{1}}`}, {`{{2}}`} for variables
                                         </label>
@@ -1309,8 +1341,12 @@ const WhatsAppInbox = () => {
                                         />
                                     </div>
                                     <div>
+                                        <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">Footer (optional)</label>
+                                        <input value={templateForm.footer} onChange={(e) => setTemplateForm({ ...templateForm, footer: e.target.value })} placeholder="Reply STOP to opt out" className="w-full border-2 border-ink bg-white px-3 py-2 text-sm outline-none focus:border-brand" />
+                                    </div>
+                                    <div>
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-inkSecondary block mb-1">
-                                            Meta template name (optional)
+                                            Local Meta name (optional)
                                         </label>
                                         <input
                                             data-testid="wa-tpl-meta-name"
@@ -1321,7 +1357,10 @@ const WhatsAppInbox = () => {
                                         />
                                         <p className="text-[10px] text-inkSecondary mt-1">Fill this only when Meta has approved this exact name — it then uses Meta's proper template API.</p>
                                     </div>
-                                    <div className="flex gap-2">
+                                    <div className="flex gap-2 flex-wrap">
+                                        <button type="button" onClick={submitTemplateToMeta} disabled={metaSubmitting} className="flex-1 bg-ink text-white px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-brand disabled:opacity-50">
+                                            {metaSubmitting ? "Submitting..." : "Submit to Meta"}
+                                        </button>
                                         <button
                                             data-testid="wa-tpl-save"
                                             onClick={saveTemplate}
@@ -1331,7 +1370,7 @@ const WhatsAppInbox = () => {
                                         </button>
                                         {editingTemplate && (
                                             <button
-                                                onClick={() => { setEditingTemplate(null); setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", meta_template_name: "" }); }}
+                                                onClick={() => { setEditingTemplate(null); setTemplateForm({ name: "", category: "utility", language: "en_US", body: "", header: "", footer: "", meta_template_name: "" }); }}
                                                 className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-white"
                                             >
                                                 Cancel
@@ -1343,8 +1382,9 @@ const WhatsAppInbox = () => {
 
                             {/* List */}
                             <div>
-                                <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-between mb-3 gap-2">
                                     <div className="text-[11px] font-mono uppercase tracking-widest text-inkSecondary">{templates.length} template{templates.length === 1 ? "" : "s"}</div>
+                                    <button type="button" onClick={syncMetaTemplates} disabled={metaSyncing} className="text-[10px] font-bold uppercase tracking-widest text-brand hover:text-ink underline disabled:opacity-50">{metaSyncing ? "Syncing..." : "Sync from Meta"}</button>
                                     {templates.length === 0 && (
                                         <button
                                             data-testid="wa-tpl-seed"

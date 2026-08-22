@@ -3913,6 +3913,70 @@ class WhatsAppTemplateIn(BaseModel):
     meta_template_name: Optional[str] = None
 
 
+class WhatsAppMetaTemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_]+$")
+    language: str = "en_US"
+    category: Literal["MARKETING", "UTILITY", "AUTHENTICATION"] = "UTILITY"
+    header: Optional[str] = Field(default=None, max_length=60)
+    body: str = Field(min_length=1, max_length=1024)
+    footer: Optional[str] = Field(default=None, max_length=60)
+
+
+def _meta_template_components(payload: WhatsAppMetaTemplateIn) -> List[dict]:
+    components = []
+    if payload.header:
+        components.append({"type": "HEADER", "format": "TEXT", "text": payload.header})
+    components.append({"type": "BODY", "text": payload.body})
+    if payload.footer:
+        components.append({"type": "FOOTER", "text": payload.footer})
+    return components
+
+
+@api_router.post("/whatsapp/templates/meta")
+async def submit_meta_template(payload: WhatsAppMetaTemplateIn, user=Depends(require_permission("settings.manage"))):
+    """Submit a template directly to Meta for review and mirror it locally."""
+    cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+    waba_id = cfg.get("waba_id") or cfg.get("business_account_id") or cfg.get("whatsapp_business_account_id") if cfg else None
+    if not cfg or not cfg.get("access_token") or not waba_id:
+        raise HTTPException(400, "Connect WhatsApp Business and add the WhatsApp Business Account ID first")
+    import requests
+    response = requests.post(
+        f"https://graph.facebook.com/v18.0/{waba_id}/message_templates",
+        headers={"Authorization": f"Bearer {cfg['access_token']}", "Content-Type": "application/json"},
+        json={"name": payload.name, "language": payload.language, "category": payload.category, "components": _meta_template_components(payload)},
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        detail = response.json().get("error", {}).get("message", response.text[:300])
+        raise HTTPException(response.status_code, f"Meta template submission failed: {detail}")
+    meta = response.json()
+    doc = {**payload.model_dump(), "category": payload.category.lower(), "meta_template_name": payload.name, "meta_id": meta.get("id"), "status": "pending", "meta_status": meta.get("status", "PENDING"), "owner_id": user["id"], "id": str(uuid.uuid4()), "param_count": _count_params(payload.body), "created_at": now_utc_iso(), "updated_at": now_utc_iso()}
+    await db.whatsapp_templates.update_one({"owner_id": user["id"], "name": payload.name}, {"$set": doc}, upsert=True)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/whatsapp/templates/meta/sync")
+async def sync_meta_templates(user=Depends(require_permission("settings.manage"))):
+    cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+    waba_id = cfg.get("waba_id") or cfg.get("business_account_id") or cfg.get("whatsapp_business_account_id") if cfg else None
+    if not cfg or not cfg.get("access_token") or not waba_id:
+        raise HTTPException(400, "Connect WhatsApp Business and add the WhatsApp Business Account ID first")
+    import requests
+    response = requests.get(f"https://graph.facebook.com/v18.0/{waba_id}/message_templates", headers={"Authorization": f"Bearer {cfg['access_token']}"}, params={"limit": 200}, timeout=20)
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, f"Meta template sync failed: {response.text[:300]}")
+    synced = []
+    for meta in response.json().get("data", []):
+        body = next((c.get("text", "") for c in meta.get("components", []) if c.get("type") == "BODY"), "")
+        header = next((c.get("text") for c in meta.get("components", []) if c.get("type") == "HEADER"), None)
+        footer = next((c.get("text") for c in meta.get("components", []) if c.get("type") == "FOOTER"), None)
+        values = {"meta_id": meta.get("id"), "meta_status": meta.get("status"), "status": "approved" if meta.get("status") == "APPROVED" else "pending", "category": (meta.get("category") or "UTILITY").lower(), "language": meta.get("language", "en_US"), "body": body, "header": header, "footer": footer, "updated_at": now_utc_iso()}
+        await db.whatsapp_templates.update_one({"owner_id": user["id"], "name": meta.get("name")}, {"$set": {**values, "meta_template_name": meta.get("name")}, "$setOnInsert": {"id": str(uuid.uuid4()), "owner_id": user["id"], "created_at": now_utc_iso()}}, upsert=True)
+        synced.append({"name": meta.get("name"), "status": meta.get("status"), "id": meta.get("id")})
+    return {"ok": True, "templates": synced, "count": len(synced)}
+
+
 def _count_params(body: str) -> int:
     """Count {{1}}, {{2}}, ... placeholders in a template body."""
     import re
