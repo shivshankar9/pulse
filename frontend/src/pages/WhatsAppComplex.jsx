@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import {
     MessageCircle, Send, Search, Phone, RefreshCw, Sparkles, Copy, Check,
-    ShieldAlert, Loader2, Trash2, User, Clock, CheckCheck, AlertCircle,
+    ArrowLeft, ShieldAlert, Loader2, Trash2, User, Clock, CheckCheck, AlertCircle,
     Settings as SettingsIcon, Link as LinkIcon, X, FileText, Plus, Edit2,
     BookTemplate, Info, UserPlus, Ticket, UserCheck, Users, Zap, Circle
 } from "lucide-react";
@@ -51,6 +51,7 @@ const WhatsAppInbox = () => {
     const [conversations, setConversations] = useState([]);
     const [selectedPhone, setSelectedPhone] = useState(null);
     const [messages, setMessages] = useState([]);
+    const [mediaBlobUrls, setMediaBlobUrls] = useState({});
     const [reply, setReply] = useState("");
     const [sending, setSending] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -166,6 +167,21 @@ const WhatsAppInbox = () => {
     useEffect(() => {
         if (selectedPhone) loadThread(selectedPhone);
     }, [selectedPhone]);
+
+    useEffect(() => {
+        let disposed = false;
+        const mediaMessages = messages.filter((m) => m.media_id && (m.message_type === "image" || m.message_type === "video"));
+        mediaMessages.forEach(async (m) => {
+            if (mediaBlobUrls[m.media_id]) return;
+            try {
+                const response = await api.get(`/whatsapp/media/${encodeURIComponent(m.media_id)}`, { responseType: "blob" });
+                if (!disposed) setMediaBlobUrls((current) => ({ ...current, [m.media_id]: URL.createObjectURL(response.data) }));
+            } catch (error) {
+                console.warn("[v0] WhatsApp media preview unavailable", m.media_id);
+            }
+        });
+        return () => { disposed = true; };
+    }, [messages]);
 
     useEffect(() => {
         if (threadEndRef.current) threadEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -509,7 +525,8 @@ const WhatsAppInbox = () => {
     return (
         <div className="flex h-[calc(100vh-0px)]" data-testid="whatsapp-page">
             {/* Left pane: conversations list */}
-            <aside className="w-[360px] bg-white border-r-2 border-ink flex flex-col">
+            <aside className={`${selectedPhone ? "hidden md:flex" : "flex"} w-full md:w-[360px] bg-white border-r-2 border-ink flex-col`}>
+
                 <div className="p-5 border-b-2 border-ink">
                     <div className="flex items-center justify-between mb-2">
                         <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary">// whatsapp.inbox</div>
@@ -672,7 +689,7 @@ const WhatsAppInbox = () => {
             </aside>
 
             {/* Right pane: thread */}
-            <main className="flex-1 flex flex-col bg-bg" data-testid="wa-thread-pane">
+            <main className={`${selectedPhone ? "flex" : "hidden md:flex"} flex-1 min-w-0 flex-col bg-bg`} data-testid="wa-thread-pane">
                 {!selectedPhone ? (
                     <div className="flex-1 grid place-items-center p-10">
                         <div className="text-center max-w-md">
@@ -705,6 +722,9 @@ const WhatsAppInbox = () => {
                         {/* Thread header */}
                         <div className="bg-white border-b-2 border-ink p-4 flex items-center justify-between gap-3 flex-wrap">
                             <div className="flex items-center gap-3 min-w-0">
+                                <button onClick={() => setSelectedPhone(null)} className="md:hidden border-2 border-ink p-2 hover:bg-ink hover:text-white" aria-label="Back to conversations">
+                                    <ArrowLeft className="w-4 h-4" />
+                                </button>
                                 <div className="w-10 h-10 border-2 border-ink grid place-items-center bg-bg text-[11px] font-bold flex-shrink-0">
                                     {initials(selectedConv?.contact_name, selectedPhone)}
                                 </div>
@@ -858,6 +878,8 @@ const WhatsAppInbox = () => {
                                     {messages.map((m) => {
                                         const outbound = m.direction === "outbound";
                                         const ts = m.sent_at || m.received_at;
+                                        const mediaType = m.message_type || m.type;
+                                        const mediaSrc = (m.media_id && mediaBlobUrls[m.media_id]) || m.media_url;
                                         return (
                                             <div
                                                 key={m.id}
@@ -869,7 +891,20 @@ const WhatsAppInbox = () => {
                                                         ? "bg-brand text-white border-brand"
                                                         : "bg-white text-ink border-ink"
                                                 }`}>
-                                                    <div className="text-sm whitespace-pre-wrap break-words">{m.body}</div>
+                                                    {mediaSrc && mediaType === "image" && (
+                                                        <img src={mediaSrc} alt="WhatsApp attachment" className="max-h-72 w-full rounded-lg object-contain bg-black/10" />
+                                                    )}
+                                                    {mediaSrc && mediaType === "video" && (
+                                                        <video src={mediaSrc} controls preload="metadata" className="max-h-72 w-full rounded-lg bg-black/10" aria-label="WhatsApp video attachment" />
+                                                    )}
+                                                    {m.body && !(/^Received (image|video|audio|document) message$/.test(m.body) && mediaSrc) && (
+                                                        <div className="text-sm whitespace-pre-wrap break-words">{m.body}</div>
+                                                    )}
+                                                    {mediaSrc && (
+                                                        <a href={mediaSrc} target="_blank" rel="noreferrer" className="mt-2 inline-flex text-[10px] font-bold uppercase tracking-widest underline underline-offset-2">
+                                                            Open attachment
+                                                        </a>
+                                                    )}
                                                     <div className={`flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-widest mt-1.5 ${
                                                         outbound ? "text-white/70 justify-end" : "text-inkSecondary"
                                                     }`}>

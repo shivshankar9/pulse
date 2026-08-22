@@ -1649,6 +1649,48 @@ async def whatsapp_send(payload: WhatsAppSendIn, user=Depends(require_permission
     doc.pop("_id", None)
     return doc
 
+@api_router.get("/whatsapp/media/{media_id}")
+async def whatsapp_media(media_id: str, user=Depends(get_current_user)):
+    """Proxy Meta media through the authenticated API so browser clients can display it."""
+    message = await db.messages.find_one(
+        {"owner_id": user["id"], "media_id": media_id},
+        {"_id": 0, "media_url": 1, "message_type": 1},
+    )
+    if not message:
+        raise HTTPException(404, "Media not found")
+    cfg = await get_decrypted_integration(user["id"], "whatsapp_business")
+    if not cfg or not cfg.get("access_token"):
+        raise HTTPException(400, "WhatsApp Business API not configured")
+    try:
+        import requests
+        media_url = message.get("media_url")
+        if not media_url:
+            metadata = requests.get(
+                f"https://graph.facebook.com/v18.0/{media_id}",
+                headers={"Authorization": f"Bearer {cfg['access_token']}"},
+                timeout=10,
+            )
+            metadata.raise_for_status()
+            media_url = metadata.json().get("url")
+        if not media_url:
+            raise HTTPException(404, "Media URL unavailable")
+        media_response = requests.get(
+            media_url,
+            headers={"Authorization": f"Bearer {cfg['access_token']}"},
+            timeout=20,
+        )
+        media_response.raise_for_status()
+        return Response(
+            content=media_response.content,
+            media_type=media_response.headers.get("content-type", "application/octet-stream"),
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.warning(f"Could not stream WhatsApp media {media_id}: {exc}")
+        raise HTTPException(502, "Unable to load WhatsApp media")
+
 @api_router.post("/debug/simulate-inbound/{owner_id}")
 async def simulate_inbound_message(owner_id: str, phone: str = "+918210066921", message: str = "Test inbound message"):
     """Debug endpoint to simulate an inbound WhatsApp message"""
@@ -3933,8 +3975,20 @@ async def delete_template(tid: str, user=Depends(require_permission("settings.ma
 async def seed_default_templates(user=Depends(get_current_user)):
     """Add a handful of default starter templates (idempotent by name)."""
     defaults = [
-        {"name": "welcome_message", "category": "utility", "body": "Hi {{1}}, thanks for reaching out to {{2}}! How can we help you today?"},
-        {"name": "order_confirmation", "category": "utility", "body": "Hi {{1}}, your order {{2}} has been confirmed. Expected delivery: {{3}}."},
+        {
+            "name": "welcome_message",
+            "category": "utility",
+            "header": "Hi {{1}},",
+            "body": "thank you for reaching out to {{1}} support team",
+            "meta_template_name": "welcome_message",
+        },
+        {
+            "name": "order",
+            "category": "utility",
+            "header": "Order confirmed",
+            "body": "Hi {{1}}, We're getting your order {{2}} ready and will let you know when it's on the way.",
+            "meta_template_name": "order",
+        },
         {"name": "appointment_reminder", "category": "utility", "body": "Hi {{1}}, this is a reminder of your appointment on {{2}} at {{3}}. Reply YES to confirm."},
         {"name": "follow_up", "category": "marketing", "body": "Hi {{1}}, just following up on our last conversation. Any questions?"},
         {"name": "otp_code", "category": "authentication", "body": "Your verification code is {{1}}. It expires in 10 minutes."},
@@ -3943,6 +3997,12 @@ async def seed_default_templates(user=Depends(get_current_user)):
     for d in defaults:
         existing = await db.whatsapp_templates.find_one({"owner_id": user["id"], "name": d["name"]}, {"_id": 0})
         if existing:
+            # Keep approved Meta names stable, but refresh the two managed starter templates.
+            if d["name"] in {"welcome_message", "order"} and not existing.get("customized"):
+                await db.whatsapp_templates.update_one(
+                    {"_id": existing.get("_id")} if existing.get("_id") else {"owner_id": user["id"], "name": d["name"]},
+                    {"$set": {**d, "status": "approved", "param_count": _count_params(d["body"]), "updated_at": now_utc_iso()}},
+                )
             continue
         doc = {
             "id": str(uuid.uuid4()),
