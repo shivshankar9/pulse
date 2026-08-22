@@ -4063,6 +4063,13 @@ async def seed_default_templates(user=Depends(get_current_user)):
             "body": "Hi {{1}}, We're getting your order {{2}} ready and will let you know when it's on the way.",
             "meta_template_name": "order",
         },
+        {
+            "name": "hello_message",
+            "category": "marketing",
+            "header": None,
+            "body": "Hi {{1}} Thanks for reaching {{2}} how may I help you?",
+            "meta_template_name": "hello_message",
+        },
         {"name": "appointment_reminder", "category": "utility", "body": "Hi {{1}}, this is a reminder of your appointment on {{2}} at {{3}}. Reply YES to confirm."},
         {"name": "follow_up", "category": "marketing", "body": "Hi {{1}}, just following up on our last conversation. Any questions?"},
         {"name": "otp_code", "category": "authentication", "body": "Your verification code is {{1}}. It expires in 10 minutes."},
@@ -4072,17 +4079,18 @@ async def seed_default_templates(user=Depends(get_current_user)):
         existing = await db.whatsapp_templates.find_one({"owner_id": user["id"], "name": d["name"]}, {"_id": 0})
         if existing:
             # Keep approved Meta names stable, but refresh the two managed starter templates.
-            if d["name"] in {"welcome_message", "order"} and not existing.get("customized"):
+            if d["name"] in {"welcome_message", "order", "hello_message"} and not existing.get("customized"):
                 await db.whatsapp_templates.update_one(
                     {"_id": existing.get("_id")} if existing.get("_id") else {"owner_id": user["id"], "name": d["name"]},
-                    {"$set": {**d, "status": "approved", "param_count": _count_params(d["body"]), "updated_at": now_utc_iso()}},
+                    {"$set": {**d, "status": "approved", "meta_status": "APPROVED", "param_count": _count_params(d["body"]), "updated_at": now_utc_iso()}},
                 )
             continue
         doc = {
             "id": str(uuid.uuid4()),
             "owner_id": user["id"],
             "language": "en_US",
-            "status": "local",
+            "status": "approved" if d.get("meta_template_name") else "local",
+            "meta_status": "APPROVED" if d.get("meta_template_name") else None,
             "param_count": _count_params(d["body"]),
             "created_at": now_utc_iso(),
             "updated_at": now_utc_iso(),
