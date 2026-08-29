@@ -183,7 +183,7 @@ const WhatsAppInbox = () => {
             }
         });
         return () => { disposed = true; };
-    }, [messages]);
+    }, [messages, mediaBlobUrls]);
 
     useEffect(() => {
         if (threadEndRef.current) threadEndRef.current.scrollIntoView({ behavior: "smooth" });
