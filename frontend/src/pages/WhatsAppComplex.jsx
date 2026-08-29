@@ -6,7 +6,7 @@ import {
     MessageCircle, Send, Search, Phone, RefreshCw, Sparkles, Copy, Check,
     ArrowLeft, ShieldAlert, Loader2, Trash2, User, Clock, CheckCheck, AlertCircle,
     Settings as SettingsIcon, Link as LinkIcon, X, FileText, Plus, Edit2,
-    BookTemplate, Info, UserPlus, Ticket, UserCheck, Users, Zap, Circle
+    BookTemplate, Info, UserPlus, Ticket, UserCheck, Users, Zap, Circle, PanelRight
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -56,6 +56,8 @@ const WhatsAppInbox = () => {
     const [sending, setSending] = useState(false);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
+    const [inboxTab, setInboxTab] = useState("all");
+    const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
     const [integrations, setIntegrations] = useState({});
     const [provider, setProvider] = useState("auto");
     const [newPhone, setNewPhone] = useState("");
@@ -190,14 +192,19 @@ const WhatsAppInbox = () => {
     }, [messages]);
 
     const filtered = useMemo(() => {
-        if (!search.trim()) return conversations;
+        let results = conversations;
+        if (inboxTab === "unread") results = results.filter((c) => c.unread > 0);
+        if (inboxTab === "assigned") results = results.filter((c) => c.assigned_to);
+        if (inboxTab === "mine") results = results.filter((c) => c.assigned_to === user?.id);
+        if (inboxTab === "unassigned") results = results.filter((c) => !c.assigned_to);
+        if (!search.trim()) return results;
         const q = search.toLowerCase();
-        return conversations.filter((c) =>
+        return results.filter((c) =>
             (c.phone || "").toLowerCase().includes(q) ||
             (c.contact_name || "").toLowerCase().includes(q) ||
             (c.last_message || "").toLowerCase().includes(q)
         );
-    }, [conversations, search]);
+    }, [conversations, search, inboxTab, user?.id]);
 
     const selectedConv = useMemo(
         () => conversations.find((c) => c.phone === selectedPhone),
@@ -641,6 +648,14 @@ const WhatsAppInbox = () => {
                     )}
                 </div>
 
+                <div className="wa-inbox-tabs" role="tablist" aria-label="Conversation filters">
+                    {[["all", "All"], ["unread", "Unread"], ["assigned", "Assigned"], ["mine", "Mine"], ["unassigned", "Unassigned"]].map(([value, label]) => (
+                        <button key={value} type="button" role="tab" aria-selected={inboxTab === value} onClick={() => setInboxTab(value)} className={inboxTab === value ? "is-active" : ""}>
+                            {label}{value === "unread" && totalUnread > 0 ? ` (${totalUnread})` : ""}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Conversations list */}
                 <div className="flex-1 overflow-y-auto" data-testid="wa-conv-list">
                     {loading ? (
@@ -801,6 +816,14 @@ const WhatsAppInbox = () => {
                                     title="Create a support ticket from this conversation"
                                 >
                                     <Ticket className="w-3 h-3" /> Ticket
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCustomerPanelOpen(true)}
+                                    className="wa-customer-panel-button border-2 border-ink bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-white flex items-center gap-1"
+                                    aria-label="Open customer details"
+                                >
+                                    <PanelRight className="w-3.5 h-3.5" /> Customer
                                 </button>
                                 <div className="relative">
                                     <button
@@ -1020,6 +1043,23 @@ const WhatsAppInbox = () => {
                     </>
                 )}
             </main>
+
+            {customerPanelOpen && selectedPhone && (
+                <aside className="wa-customer-panel" aria-label="Customer details">
+                    <div className="flex items-start justify-between border-b border-border p-5">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand/10 text-sm font-bold text-brand">{initials(selectedConv?.contact_name, selectedPhone)}</div>
+                            <div className="min-w-0"><h2 className="truncate font-heading text-lg font-black">{selectedConv?.contact_name || "WhatsApp customer"}</h2><p className="truncate text-xs text-inkSecondary">{selectedPhone}</p></div>
+                        </div>
+                        <button onClick={() => setCustomerPanelOpen(false)} className="icon-button" aria-label="Close customer details"><X className="w-4 h-4" /></button>
+                    </div>
+                    <div className="space-y-6 overflow-y-auto p-5">
+                        <section><p className="wa-panel-label">Customer details</p><dl className="mt-3 space-y-3 text-sm"><div><dt>Phone</dt><dd>{selectedPhone}</dd></div>{selectedConv?.contact_email && <div><dt>Email</dt><dd>{selectedConv.contact_email}</dd></div>}<div><dt>Channel</dt><dd>WhatsApp</dd></div></dl></section>
+                        <section><p className="wa-panel-label">Conversation</p><dl className="mt-3 space-y-3 text-sm"><div><dt>Assigned to</dt><dd>{selectedConv?.assigned_to_name || "Unassigned"}</dd></div><div><dt>Last contact</dt><dd>{fmtFullTime(selectedConv?.last_ts) || "No messages yet"}</dd></div></dl></section>
+                        <div className="space-y-2"><button onClick={openCreateTicket} className="btn-primary w-full"><Ticket className="w-4 h-4" />Create ticket</button>{selectedConv?.contact_id ? <Link to="/app/contacts" className="flex min-h-10 items-center justify-center rounded-xl border border-border text-xs font-bold hover:bg-bg">Open customer profile</Link> : <button onClick={openSyncContact} className="flex min-h-10 w-full items-center justify-center rounded-xl border border-border text-xs font-bold hover:bg-bg">Create customer profile</button>}</div>
+                    </div>
+                </aside>
+            )}
 
             {/* New conversation modal */}
             {showNewConv && (
