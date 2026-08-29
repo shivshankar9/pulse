@@ -13,7 +13,7 @@ import Emails from "./pages/Emails";
 import AIAssistant from "./pages/AIAssistant";
 import Tickets from "./pages/TicketsComplex";
 import Channels from "./pages/Channels";
-import WhatsAppInbox from "./pages/WhatsApp";
+import WhatsAppInbox from "./pages/WhatsAppComplex";
 import Settings from "./pages/Settings";
 import CRMWorkspace from "./pages/CRMWorkspace";
 import PublicSupport from "./pages/PublicSupport";
