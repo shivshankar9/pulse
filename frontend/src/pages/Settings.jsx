@@ -76,8 +76,8 @@ const Settings = () => {
                             onClick={() => setTab(t.id)}
                             className={`px-4 py-2.5 rounded-md text-sm font-semibold flex items-center gap-2 transition-all ${
                                 tab === t.id 
-                                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md" 
-                                    : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                                    ? "bg-gray-900 text-white shadow-md" 
+                                    : "text-gray-700 hover:text-gray-950 hover:bg-gray-100"
                             }`}
                         >
                             <t.icon className="w-4 h-4" /> {t.label}
@@ -754,6 +754,7 @@ const RolesTab = () => (
 
 const TeamTab = () => {
     const [members, setMembers] = useState([]);
+    const [teamError, setTeamError] = useState("");
     const [invites, setInvites] = useState([]);
     const [email, setEmail] = useState("");
     const [role, setRole] = useState("agent");
@@ -770,7 +771,9 @@ const TeamTab = () => {
             setMembers(users.data || []);
             setInvites(pending.data || []);
         } catch (error) {
-            toast.error(error.response?.data?.detail || "Unable to load team members");
+            const detail = error.response?.data?.detail || "Unable to load team members";
+            setTeamError(detail.includes("users.manage") ? "Only workspace admins can add teammates. Ask an admin to grant you Team management access." : detail);
+            toast.error(detail);
         } finally {
             setLoading(false);
         }
@@ -825,7 +828,7 @@ const TeamTab = () => {
                 </form>
             </div>
             <div className="grid gap-6 lg:grid-cols-2">
-                <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md"><h3 className="text-lg font-bold text-gray-900">Active members</h3><div className="mt-4 flex flex-col gap-3">{loading ? <p className="text-gray-500">Loading team...</p> : members.length ? members.map((member) => <div key={member.id} className="flex items-center justify-between rounded-lg border border-gray-200 p-3"><div><p className="font-semibold text-gray-900">{member.name || member.email}</p><p className="text-sm text-gray-500">{member.email}</p></div><span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700">{member.role_label || member.role || "Member"}</span></div>) : <p className="text-gray-500">No members found.</p>}</div></div>
+                <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md"><h3 className="text-lg font-bold text-gray-900">Active members</h3><div className="mt-4 flex flex-col gap-3">{teamError && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{teamError}</div>}{loading ? <p className="text-gray-500">Loading team...</p> : members.length ? members.map((member) => <div key={member.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 p-3"><div className="min-w-0"><p className="truncate font-semibold text-gray-900">{member.name || member.email}</p><p className="truncate text-sm text-gray-500">{member.email}</p></div><select aria-label={`Role for ${member.email}`} value={member.role || "agent"} onChange={async (e) => { try { await api.patch(`/users/${member.id}/role`, { role: e.target.value }); setMembers((current) => current.map((item) => item.id === member.id ? { ...item, role: e.target.value } : item)); toast.success("Access updated"); } catch (error) { toast.error(error.response?.data?.detail || "Unable to update access"); } }} className="rounded-md border border-gray-300 px-2 py-2 text-sm font-semibold text-gray-900"><option value="admin">Admin</option><option value="manager">Manager</option><option value="agent">Agent</option><option value="viewer">Viewer</option></select></div>) : <p className="text-gray-500">No members found.</p>}</div></div>
                 <div className="bg-white border-2 border-gray-200 rounded-xl p-6 shadow-md"><h3 className="text-lg font-bold text-gray-900">Pending invitations</h3><div className="mt-4 flex flex-col gap-3">{invites.length ? invites.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 p-3"><div className="min-w-0"><p className="truncate font-semibold text-gray-900">{item.email}</p><p className="text-sm text-gray-500">{item.role} · expires {new Date(item.expires_at).toLocaleDateString()}</p></div><button type="button" onClick={() => removeInvite(item.id)} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"><Trash2 className="h-4 w-4" />Cancel</button></div>) : <p className="text-gray-500">No pending invitations.</p>}</div></div>
             </div>
         </div>
