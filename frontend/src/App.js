@@ -59,6 +59,9 @@ function App() {
                             <Route path="/app/campaigns" element={<CRMWorkspace type="campaigns" />} />
                             <Route path="/app/templates" element={<CRMWorkspace type="templates" />} />
                             <Route path="/app/analytics" element={<CRMWorkspace type="analytics" />} />
+                            <Route path="/app/calls" element={<CRMWorkspace type="calls" />} />
+                            <Route path="/app/automations" element={<CRMWorkspace type="automations" />} />
+                            <Route path="/app/knowledge" element={<CRMWorkspace type="knowledge" />} />
                         </Route>
                     </Routes>
                 </BrowserRouter>

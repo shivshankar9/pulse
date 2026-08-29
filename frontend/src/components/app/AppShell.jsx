@@ -1,13 +1,13 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio, Settings as SettingsIcon, MessageCircle, Megaphone, Inbox, FileText, Bot, Search, Plus, Menu, X } from "lucide-react";
+import { LayoutGrid, Users, GitBranch, ListChecks, Mail, Sparkles, LogOut, LifeBuoy, Radio, Settings as SettingsIcon, MessageCircle, Megaphone, Inbox, FileText, Bot, Phone, Search, Plus, Menu, X } from "lucide-react";
 import { useState } from "react";
 
 const groups = [
     { label: "Overview", items: [{ to: "/app", label: "Today", icon: LayoutGrid, end: true, testid: "nav-dashboard" }, { to: "/app/analytics", label: "Analytics", icon: GitBranch, testid: "nav-analytics" }] },
     { label: "Customer growth", items: [{ to: "/app/contacts", label: "Customers", icon: Users, testid: "nav-contacts" }, { to: "/app/pipeline", label: "Leads & pipeline", icon: GitBranch, testid: "nav-pipeline" }, { to: "/app/activities", label: "Tasks & follow-ups", icon: ListChecks, testid: "nav-activities" }] },
-    { label: "Communications", items: [{ to: "/app/inbox", label: "Unified inbox", icon: Inbox, testid: "nav-inbox" }, { to: "/app/whatsapp", label: "WhatsApp", icon: MessageCircle, testid: "nav-whatsapp" }, { to: "/app/emails", label: "Email", icon: Mail, testid: "nav-emails" }, { to: "/app/campaigns", label: "Campaigns", icon: Megaphone, testid: "nav-campaigns" }, { to: "/app/templates", label: "Templates", icon: FileText, testid: "nav-templates" }] },
-    { label: "Operations", items: [{ to: "/app/tickets", label: "Tickets", icon: LifeBuoy, testid: "nav-tickets" }, { to: "/app/channels", label: "Channels", icon: Radio, testid: "nav-channels" }, { to: "/app/assistant", label: "AI assistant", icon: Sparkles, testid: "nav-assistant" }, { to: "/app/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings", perm: "settings.manage" }] },
+    { label: "Communications", items: [{ to: "/app/inbox", label: "Unified inbox", icon: Inbox, testid: "nav-inbox" }, { to: "/app/whatsapp", label: "WhatsApp", icon: MessageCircle, testid: "nav-whatsapp" }, { to: "/app/emails", label: "Email", icon: Mail, testid: "nav-emails" }, { to: "/app/calls", label: "Calls & IVR", icon: Phone, testid: "nav-calls" }, { to: "/app/campaigns", label: "Campaigns", icon: Megaphone, testid: "nav-campaigns" }, { to: "/app/templates", label: "Templates", icon: FileText, testid: "nav-templates" }] },
+    { label: "Operations", items: [{ to: "/app/tickets", label: "Tickets", icon: LifeBuoy, testid: "nav-tickets" }, { to: "/app/automations", label: "Automations", icon: Bot, testid: "nav-automations" }, { to: "/app/knowledge", label: "Knowledge base", icon: FileText, testid: "nav-knowledge" }, { to: "/app/channels", label: "Integrations", icon: Radio, testid: "nav-channels" }, { to: "/app/assistant", label: "AI assistant", icon: Sparkles, testid: "nav-assistant" }, { to: "/app/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings", perm: "settings.manage" }] },
 ];
 
 const AppShell = () => {
