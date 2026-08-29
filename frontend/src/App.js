@@ -16,6 +16,8 @@ import Channels from "./pages/Channels";
 import WhatsAppInbox from "./pages/WhatsAppComplex";
 import Settings from "./pages/Settings";
 import CRMWorkspace from "./pages/CRMWorkspace";
+import TemplateCenter from "./pages/TemplateCenter";
+import CallsIvr from "./pages/CallsIvr";
 import PublicSupport from "./pages/PublicSupport";
 import AcceptInvite from "./pages/AcceptInvite";
 import "./App.css";
@@ -57,9 +59,9 @@ function App() {
                             <Route path="/app/assistant" element={<AIAssistant />} />
                             <Route path="/app/inbox" element={<CRMWorkspace type="inbox" />} />
                             <Route path="/app/campaigns" element={<CRMWorkspace type="campaigns" />} />
-                            <Route path="/app/templates" element={<CRMWorkspace type="templates" />} />
+                            <Route path="/app/templates" element={<TemplateCenter />} />
                             <Route path="/app/analytics" element={<CRMWorkspace type="analytics" />} />
-                            <Route path="/app/calls" element={<CRMWorkspace type="calls" />} />
+                            <Route path="/app/calls" element={<CallsIvr />} />
                             <Route path="/app/automations" element={<CRMWorkspace type="automations" />} />
                             <Route path="/app/knowledge" element={<CRMWorkspace type="knowledge" />} />
                         </Route>
