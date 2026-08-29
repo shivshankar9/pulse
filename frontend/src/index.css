@@ -128,3 +128,12 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Override shadcn rounded by default for our buttons/inputs we keep ours */
 [data-slot="button"], .ui-input, .ui-card { border-radius: 0 !important; }
+
+/* Keep labels and controls readable across every workspace and color mode. */
+button, input, select, textarea { color: var(--text); }
+button:disabled { color: var(--text-secondary); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.bg-ink { color: #fff; }
+.bg-brand { color: #fff; }
+.bg-white { color: var(--text); }
+.text-white { color: #fff !important; }
