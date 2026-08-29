@@ -546,7 +546,7 @@ const WhatsAppInbox = () => {
     };
 
     return (
-        <div className="flex h-[calc(100vh-0px)]" data-testid="whatsapp-page">
+        <div className="whatsapp-shell flex h-[calc(100vh-0px)]" data-testid="whatsapp-page">
             {/* Left pane: conversations list */}
             <aside className={`${selectedPhone ? "hidden md:flex" : "flex"} w-full md:w-[360px] bg-white border-r-2 border-ink flex-col`}>
 
