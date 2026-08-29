@@ -54,6 +54,7 @@ html, body, #root {
 body {
     margin: 0;
     background: var(--bg);
+    min-width: 320px;
     color: var(--text);
     font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -131,6 +132,10 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Keep labels and controls readable across every workspace and color mode. */
 button, input, select, textarea { color: var(--text); }
+input::placeholder, textarea::placeholder { color: var(--text-secondary); opacity: 1; }
+button { min-height: 40px; }
+@media (max-width: 767px) { .page-content { padding: 1rem; } }
+.page-content { width: 100%; max-width: 1600px; margin-inline: auto; }
 button:disabled { color: var(--text-secondary); }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
 .bg-ink { color: #fff; }

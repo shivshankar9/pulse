@@ -79,7 +79,7 @@ const Pipeline = () => {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-            <div className="p-4 sm:p-6 md:p-10 max-w-[1400px]" data-testid="pipeline-page">
+            <div className="page-content p-4 sm:p-6 lg:p-10" data-testid="pipeline-page">
                 {/* Enhanced Header */}
                 <div className="mb-6 sm:mb-8">
                     <div className="bg-white border-b border-gray-200 shadow-md rounded-t-xl">
