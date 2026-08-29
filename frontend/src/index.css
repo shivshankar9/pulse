@@ -6,19 +6,19 @@
 @tailwind utilities;
 
 :root {
-    --bg: #F2F0EA;
-    --surface: #FFFCF7;
-    --primary: #F05A47;
-    --primary-hover: #C94032;
-    --text: #17212B;
-    --text-secondary: #66727D;
-    --border: #D9D6CE;
-    --ai-bg: #E9F0FF;
-    --success: #2C826B;
-    --warning: #D39A3D;
-    --danger: #C94B4B;
-    --blue: #3767D6;
-    --ink-soft: #31404D;
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --primary: #e85d4a;
+    --primary-hover: #cf4939;
+    --text: #17212b;
+    --text-secondary: #687385;
+    --border: #e4e7ed;
+    --ai-bg: #eef4ff;
+    --success: #18856e;
+    --warning: #bd7a14;
+    --danger: #c54545;
+    --blue: #3867dd;
+    --ink-soft: #31404d;
 
     /* Shadcn overrides (kept neutral so brutalist styles dominate) */
     --background: 42 33% 93%;
@@ -60,6 +60,7 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-feature-settings: "ss01", "ss02";
+    line-height: 1.45;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -82,20 +83,20 @@ h1, h2, h3, h4, h5, h6 {
 ::-webkit-scrollbar-thumb { background: #d0d0cc; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #0a0a0a; }
 
-/* Brutalist hard shadow utility */
+/* Legacy utility names remain, but their appearance now belongs to the product system. */
 .brutal-shadow {
-    box-shadow: 4px 4px 0 0 rgba(10,10,10,1);
+    box-shadow: 0 12px 25px rgba(28, 39, 55, .12);
 }
 .brutal-shadow-sm {
-    box-shadow: 2px 2px 0 0 rgba(10,10,10,1);
+    box-shadow: 0 5px 14px rgba(28, 39, 55, .08);
 }
 .brutal-hover {
     transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
 }
 .brutal-hover:hover {
-    transform: translate(-2px,-2px);
-    box-shadow: 6px 6px 0 0 rgba(10,10,10,1);
-    border-color: #0a0a0a;
+    transform: translateY(-2px);
+    box-shadow: 0 14px 28px rgba(28, 39, 55, .12);
+    border-color: #cfd5df;
 }
 
 /* Grain overlay for hero */
@@ -127,8 +128,8 @@ h1, h2, h3, h4, h5, h6 {
     animation: ticker 40s linear infinite;
 }
 
-/* Override shadcn rounded by default for our buttons/inputs we keep ours */
-[data-slot="button"], .ui-input, .ui-card { border-radius: 0 !important; }
+/* Shared interactive foundation */
+[data-slot="button"], .ui-input, .ui-card { border-radius: .7rem !important; }
 
 /* Keep labels and controls readable across every workspace and color mode. */
 button, input, select, textarea { color: var(--text); }
@@ -142,6 +143,42 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .bg-brand { color: #fff; }
 .bg-white { color: var(--text); }
 .text-white { color: #fff !important; }
+
+/* BillByteKOT product system */
+.app-header { position: sticky; top: 0; z-index: 30; display: flex; height: 74px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 92%, transparent); padding: 0 1.5rem; backdrop-filter: blur(14px); }
+.nav-item { display: flex; align-items: center; gap: .75rem; border-radius: .7rem; padding: .63rem .75rem; font-size: .8125rem; font-weight: 600; color: var(--text-secondary); transition: background .16s ease, color .16s ease; }
+.nav-item:hover { background: #f4f5f8; color: var(--text); }
+.nav-item-active { background: #fff0ed; color: var(--primary); }
+.btn-primary { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: .5rem; border-radius: .7rem; background: var(--primary); padding: .625rem .9rem; font-size: .75rem; font-weight: 700; color: white; box-shadow: 0 6px 14px rgba(232, 93, 74, .18); transition: background .16s ease, transform .16s ease; }
+.btn-primary:hover { background: var(--primary-hover); color: white; transform: translateY(-1px); }
+.icon-button { display: grid; min-height: 38px; width: 38px; place-items: center; border: 1px solid var(--border); border-radius: .7rem; color: var(--text-secondary); transition: background .16s ease, color .16s ease; }
+.icon-button:hover { background: var(--bg); color: var(--text); }
+.search-trigger { min-width: 225px; align-items: center; gap: .55rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--bg); padding: .55rem .65rem; color: var(--text-secondary); font-size: .75rem; text-align: left; }
+.search-trigger kbd { margin-left: auto; border: 1px solid var(--border); border-radius: .3rem; background: white; padding: .1rem .3rem; font-size: .6rem; }
+.mobile-nav { position: fixed; right: 0; bottom: 0; left: 0; z-index: 35; display: flex; justify-content: space-around; border-top: 1px solid var(--border); background: color-mix(in srgb, white 94%, transparent); padding: .45rem .25rem calc(.45rem + env(safe-area-inset-bottom)); backdrop-filter: blur(14px); }
+.mobile-nav a, .mobile-nav button { display: grid; min-height: 45px; min-width: 52px; place-items: center; gap: .1rem; border-radius: .6rem; color: var(--text-secondary); font-size: .6rem; font-weight: 700; }
+.mobile-nav a.active { color: var(--primary); background: #fff0ed; }
+
+/* Align every existing route around the same relaxed, readable workspace. */
+.page-content { max-width: 1440px; padding: 1.5rem; }
+.page-content > .bg-white, [data-testid="contacts-filter-bar"], [data-testid="contacts-table"] { border-color: var(--border) !important; box-shadow: 0 2px 6px rgba(24, 34, 48, .03) !important; }
+[data-testid="contacts-page"] .bg-gradient-to-br, [data-testid="contacts-page"] .bg-gradient-to-r { background-image: none !important; }
+[data-testid="contacts-page"] .text-purple-600, [data-testid="contacts-page"] .text-purple-700 { color: var(--primary) !important; }
+[data-testid="contacts-page"] .bg-purple-50 { background-color: #fff0ed !important; }
+[data-testid="contacts-page"] .border-purple-200 { border-color: #f7c9c0 !important; }
+[data-testid="contacts-page"] button.bg-gradient-to-r { background: var(--primary) !important; }
+[data-testid="contacts-page"] table th { background: #f8f9fb !important; color: var(--text-secondary) !important; }
+[data-testid="contacts-page"] table tr:hover { background: #fff8f6 !important; }
+
+@media (max-width: 767px) {
+  .app-header { height: 60px; padding: 0 1rem; }
+  .page-content { padding: 1rem; }
+  [data-testid="contacts-page"] table thead { display: none; }
+  [data-testid="contacts-page"] table, [data-testid="contacts-page"] tbody, [data-testid="contacts-page"] tr, [data-testid="contacts-page"] td { display: block; width: 100%; }
+  [data-testid="contacts-page"] tr[data-testid^="contact-row-"] { margin: .75rem; width: calc(100% - 1.5rem); border: 1px solid var(--border); border-radius: .75rem; padding: .35rem 0; }
+  [data-testid="contacts-page"] td { padding: .45rem 1rem; }
+  [data-testid="contacts-page"] td:nth-child(2), [data-testid="contacts-page"] td:nth-child(3) { display: none; }
+}
 
 /* WhatsApp-inspired inbox: green chrome, soft surfaces, rounded conversation UI. */
 .whatsapp-shell { --wa-green: #128c7e; --wa-dark: #075e54; --wa-light: #d9fdd3; --wa-wall: #efeae2; background: var(--wa-wall); }
