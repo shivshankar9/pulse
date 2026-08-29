@@ -15,6 +15,7 @@ import Tickets from "./pages/TicketsComplex";
 import Channels from "./pages/Channels";
 import WhatsAppInbox from "./pages/WhatsApp";
 import Settings from "./pages/Settings";
+import CRMWorkspace from "./pages/CRMWorkspace";
 import PublicSupport from "./pages/PublicSupport";
 import AcceptInvite from "./pages/AcceptInvite";
 import "./App.css";
@@ -54,6 +55,10 @@ function App() {
                             <Route path="/app/whatsapp" element={<WhatsAppInbox />} />
                             <Route path="/app/settings" element={<Settings />} />
                             <Route path="/app/assistant" element={<AIAssistant />} />
+                            <Route path="/app/inbox" element={<CRMWorkspace type="inbox" />} />
+                            <Route path="/app/campaigns" element={<CRMWorkspace type="campaigns" />} />
+                            <Route path="/app/templates" element={<CRMWorkspace type="templates" />} />
+                            <Route path="/app/analytics" element={<CRMWorkspace type="analytics" />} />
                         </Route>
                     </Routes>
                 </BrowserRouter>
