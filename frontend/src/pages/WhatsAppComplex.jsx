@@ -57,7 +57,8 @@ const WhatsAppInbox = () => {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [inboxTab, setInboxTab] = useState("all");
-    const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
+    // Wide support workspaces keep customer context visible; smaller screens use the detail button.
+    const [customerPanelOpen, setCustomerPanelOpen] = useState(() => window.innerWidth >= 1280);
     const [integrations, setIntegrations] = useState({});
     const [provider, setProvider] = useState("auto");
     const [newPhone, setNewPhone] = useState("");
