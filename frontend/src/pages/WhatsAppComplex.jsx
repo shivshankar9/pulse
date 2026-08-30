@@ -559,20 +559,19 @@ const WhatsAppInbox = () => {
             <aside className={`${selectedPhone ? "hidden md:flex" : "flex"} w-full md:w-[360px] bg-white border-r-2 border-ink flex-col`}>
 
                 <div className="p-5 border-b-2 border-ink">
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="text-[11px] font-mono uppercase tracking-[0.3em] text-inkSecondary">// whatsapp.inbox</div>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="font-heading font-black text-2xl tracking-tight">WhatsApp Inbox</h1>
+                            <p className="text-xs text-inkSecondary mt-1">
+                                {conversations.length} conversation{conversations.length === 1 ? "" : "s"}
+                            </p>
+                        </div>
                         {totalUnread > 0 && (
-                            <span data-testid="wa-unread-total" className="bg-brand text-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest">
-                                {totalUnread} unread
+                            <span data-testid="wa-unread-total" className="bg-brand text-white px-2 py-1 text-[10px] font-bold rounded-full">
+                                {totalUnread}
                             </span>
                         )}
                     </div>
-                    <h1 className="font-heading font-black text-2xl tracking-tighter flex items-center gap-2">
-                        <MessageCircle className="w-6 h-6 text-brand" /> WhatsApp
-                    </h1>
-                    <p className="text-[11px] text-inkSecondary mt-1">
-                        {conversations.length} conversation{conversations.length === 1 ? "" : "s"}
-                    </p>
                 </div>
 
                 {/* Status banner */}
@@ -801,6 +800,7 @@ const WhatsAppInbox = () => {
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 flex-wrap">
+                                <a href={`tel:${selectedPhone}`} className="wa-header-action" aria-label="Call customer" title="Call customer"><Phone className="w-3.5 h-3.5" /></a>
                                 <button
                                     data-testid="wa-sync-contact-btn"
                                     onClick={openSyncContact}
@@ -1002,7 +1002,15 @@ const WhatsAppInbox = () => {
                                     )}
                                 </div>
                             )}
-                            <div className="max-w-3xl mx-auto flex gap-2">
+                            <div className="max-w-3xl mx-auto">
+                                {templates.filter((t) => t.status === "approved" || t.meta_status === "APPROVED" || t.meta_template_name).length > 0 && (
+                                    <div className="mb-2 flex flex-wrap gap-2" aria-label="Suggested templates">
+                                        {templates.filter((t) => t.status === "approved" || t.meta_status === "APPROVED" || t.meta_template_name).slice(0, 4).map((t) => (
+                                            <button key={t.id} type="button" onClick={() => { setSelectedTemplate(t); setTemplateParams(Array(t.param_count || 0).fill("")); setShowTemplatePicker(true); }} className="rounded-full border border-brand/40 bg-brand/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-brand hover:bg-brand hover:text-white">{t.name.replaceAll("_", " ")}</button>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="flex min-w-0 gap-2">
                                 <button
                                     data-testid="wa-template-btn"
                                     onClick={openTemplatePicker}
@@ -1011,19 +1019,14 @@ const WhatsAppInbox = () => {
                                 >
                                     <BookTemplate className="w-4 h-4" /> Template
                                 </button>
-  <div className="flex flex-wrap gap-2 mb-2">
-  {templates.filter((t) => t.status === "approved" || t.meta_status === "APPROVED" || t.meta_template_name).slice(0, 4).map((t) => (
-  <button key={t.id} type="button" onClick={() => { setSelectedTemplate(t); setTemplateParams(Array(t.param_count || 0).fill("")); setShowTemplatePicker(true); }} className="rounded-full border border-brand/40 bg-brand/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-brand hover:bg-brand hover:text-white">{t.name.replaceAll("_", " ")}</button>
-  ))}
-  </div>
-  <textarea
-  data-testid="wa-reply-input"
+                                <textarea
+                                    data-testid="wa-reply-input"
                                     value={reply}
                                     onChange={(e) => setReply(e.target.value)}
                                     onKeyDown={handleKey}
                                     rows={1}
                                     placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-                                    className="flex-1 border-2 border-ink bg-bg px-3 py-2.5 text-sm outline-none focus:border-brand resize-none max-h-40"
+                                    className="min-w-0 flex-1 border-2 border-ink bg-bg px-3 py-2.5 text-sm outline-none focus:border-brand resize-none max-h-40"
                                 />
                                 <button
                                     data-testid="wa-send-btn"
@@ -1034,6 +1037,7 @@ const WhatsAppInbox = () => {
                                     {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                                     Send
                                 </button>
+                                </div>
                             </div>
                             {!anyConfigured && (
                                 <div className="max-w-3xl mx-auto mt-2 text-[10px] font-mono uppercase tracking-widest text-inkSecondary">
