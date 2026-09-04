@@ -10,7 +10,7 @@ const groups = [
   { label: "Operations", items: [["/app/tickets", "Tickets", LifeBuoy], ["/app/automations", "Automations", Bot], ["/app/settings", "Settings", Settings]] },
 ];
 const allItems = groups.flatMap((g) => g.items.map(([to, label, icon]) => ({ to, label, icon, group: g.label })));
-const titleFor = (pathname) => allItems.find((item) => item.to === pathname)?.label || "Workspace";
+const titleFor = (pathname) => allItems.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))?.label || "Workspace";
 
 function CommandMenu({ open, onClose }) {
   const navigate = useNavigate(); const [query, setQuery] = useState("");
