@@ -185,6 +185,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .whatsapp-shell > aside { background: var(--surface); border-color: var(--border) !important; }
 .whatsapp-shell aside > div:first-child { background: var(--surface); border-color: var(--border) !important; }
 .whatsapp-shell aside input { border: 1px solid var(--border) !important; border-radius: .7rem; background: #f8fafb; box-shadow: none; }
+
+/* Core CRM surfaces: one quiet system across legacy pages. */
+[data-testid="contacts-page"], [data-testid="pipeline-page"], [data-testid="activities-page"] { color: var(--text); }
+[data-testid="contacts-page"] .bg-gradient-to-br, [data-testid="pipeline-page"] .bg-gradient-to-br, [data-testid="activities-page"] .bg-gradient-to-br { background: transparent !important; }
+[data-testid="contacts-page"] .bg-gradient-to-r, [data-testid="pipeline-page"] .bg-gradient-to-r, [data-testid="activities-page"] .bg-gradient-to-r { background-image: none !important; }
+[data-testid="contacts-page"] .bg-white, [data-testid="pipeline-page"] .bg-white, [data-testid="activities-page"] .bg-white { background-color: var(--surface) !important; }
+[data-testid="contacts-page"] [class*="shadow"], [data-testid="pipeline-page"] [class*="shadow"], [data-testid="activities-page"] [class*="shadow"] { box-shadow: 0 2px 8px rgba(24,34,48,.04) !important; }
+[data-testid="contacts-page"] input, [data-testid="contacts-page"] select, [data-testid="contacts-page"] textarea, [data-testid="pipeline-page"] input, [data-testid="pipeline-page"] select, [data-testid="pipeline-page"] textarea, [data-testid="activities-page"] input, [data-testid="activities-page"] select, [data-testid="activities-page"] textarea { border-color: var(--border) !important; background: var(--surface); }
+[data-testid="contacts-page"] button.bg-gradient-to-r, [data-testid="pipeline-page"] button.bg-gradient-to-r, [data-testid="activities-page"] button.bg-gradient-to-r { background: var(--primary) !important; }
+[data-testid="pipeline-page"] [data-testid^="pipeline-column-"] { border-width: 1px; border-color: var(--border) !important; background: var(--surface) !important; box-shadow: none !important; }
+[data-testid="pipeline-page"] [data-testid^="deal-card-"] { border-width: 1px; border-color: var(--border) !important; box-shadow: 0 2px 5px rgba(24,34,48,.04); }
+[data-testid="activities-page"] [data-testid^="activity-row-"] { border-left-width: 0; }
+@media (max-width: 767px) { [data-testid="pipeline-page"] [data-testid="pipeline-board"] { display: flex; flex-direction: column; } [data-testid="pipeline-page"] [data-testid^="pipeline-column-"] { min-height: 180px; } }
+
+/* Explicit state primitives for API-backed screens. */
+.loading-skeleton { background: linear-gradient(90deg, var(--bg), #fff, var(--bg)); background-size: 200% 100%; animation: skeleton 1.4s ease-in-out infinite; }
+@keyframes skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .whatsapp-shell aside button[data-testid="wa-new-conv"] { background: var(--wa-green); border-radius: .7rem; text-transform: none; letter-spacing: 0; font-size: .75rem; }
 .whatsapp-shell aside button[data-testid="wa-refresh"], .whatsapp-shell aside button[data-testid="wa-webhooks"], .whatsapp-shell aside button[data-testid="wa-manage-templates"] { border: 1px solid var(--border); border-radius: .65rem; background: #fff; color: var(--text-secondary); }
 .whatsapp-shell aside [data-testid^="wa-conv-"] { position: relative; border: 0; border-bottom: 1px solid #eef0f2; padding: .85rem 1rem; }

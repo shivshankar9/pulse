@@ -260,14 +260,16 @@ const WhatsAppInbox = () => {
     const onlineCount = useMemo(() => team.filter((t) => t.online).length, [team]);
 
     const send = async () => {
-        if ((!reply.trim() && !mediaUrl.trim()) || !selectedPhone) return;
+        if ((!reply.trim() && !mediaUrl.trim()) || !selectedPhone || sending) return;
+        const body = reply.trim();
+        const attachment = mediaUrl.trim();
         setSending(true);
         try {
             const { data } = await api.post("/whatsapp/send", {
                 to: selectedPhone,
-                body: reply.trim(),
-                media_url: mediaUrl.trim() || null,
-                media_type: mediaUrl.trim() ? mediaType : null,
+                body,
+                media_url: attachment || null,
+                media_type: attachment ? mediaType : null,
                 provider: "auto",
                 contact_id: selectedConv?.contact_id || null,
             });
@@ -459,7 +461,9 @@ const WhatsAppInbox = () => {
     };
 
     const handleKey = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        // Do not submit while a CJK IME is confirming composition.
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter" && !e.shiftKey && !sending) {
             e.preventDefault();
             send();
         }
@@ -923,9 +927,11 @@ const WhatsAppInbox = () => {
                                         value={reply}
                                         onChange={(e) => setReply(e.target.value)}
                                         onKeyDown={handleKey}
-                                        rows={1}
+                                        rows={2}
                                         placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-                                        className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none max-h-32"
+                                        aria-label="WhatsApp message"
+                                        spellCheck="true"
+                                        className="min-w-0 flex-1 basis-full sm:basis-auto border border-gray-200 rounded-lg px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-y min-h-12 max-h-32"
                                     />
                                     <button
                                         onClick={send}

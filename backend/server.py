@@ -2025,13 +2025,33 @@ async def webhook_inbound(channel: str, owner_id: str, request: Request):
             data = {}
 
     if channel == "resend":
-        # Resend webhook event types: email.sent, email.delivered, email.opened, etc.
+        # Resend delivery events and inbound receiving events share this endpoint.
         event_type = data.get("type", "unknown")
-        message_id = (data.get("data") or {}).get("email_id") or (data.get("data") or {}).get("id")
-        if event_type == "email.opened" and message_id:
+        event_data = data.get("data") or {}
+        event_id = data.get("id") or event_data.get("email_id") or event_data.get("id")
+        if event_id and await db.webhook_events.find_one({"owner_id": owner_id, "channel": channel, "event_id": event_id}, {"_id": 1}):
+            return {"ok": True, "duplicate": True}
+        message_id = event_data.get("email_id") or event_data.get("id")
+        if event_type in ("email.received", "email.inbound", "email.received_email"):
+            from_email = event_data.get("from") or event_data.get("from_email") or ""
+            to_email = event_data.get("to") or event_data.get("to_email") or ""
+            if isinstance(to_email, list):
+                to_email = to_email[0] if to_email else ""
+            subject = event_data.get("subject") or "(no subject)"
+            body = event_data.get("text") or event_data.get("body") or event_data.get("html") or ""
+            inbound_id = message_id or event_id or str(uuid.uuid4())
+            if not await db.emails.find_one({"owner_id": owner_id, "provider_message_id": inbound_id}, {"_id": 1}):
+                contact = await db.contacts.find_one({"email": str(from_email).lower(), "owner_id": owner_id}, {"_id": 0, "id": 1})
+                await db.emails.insert_one({
+                    "id": str(uuid.uuid4()), "owner_id": owner_id, "direction": "inbound",
+                    "from_email": from_email, "to": to_email, "subject": subject, "body": body,
+                    "provider": "resend", "provider_message_id": inbound_id, "contact_id": contact.get("id") if contact else None,
+                    "read": False, "received_at": now_utc_iso(), "created_at": now_utc_iso(),
+                })
+        elif event_type == "email.opened" and message_id:
             await db.emails.update_one({"id": message_id, "owner_id": owner_id}, {"$set": {"opened": True, "opened_at": now_utc_iso()}})
         await db.webhook_events.insert_one({
-            "id": str(uuid.uuid4()), "owner_id": owner_id, "channel": channel,
+            "id": str(uuid.uuid4()), "event_id": event_id, "owner_id": owner_id, "channel": channel,
             "event_type": event_type, "payload": data, "received_at": now_utc_iso(),
         })
         return {"ok": True}
