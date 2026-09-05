@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import api from "../lib/api";
 import { TelephonySettings } from "../components/voice/TelephonySettings";
@@ -91,7 +91,7 @@ export default function CallsIvr() {
 
   const selectedFlow = useMemo(() => flows.find((flow) => flow.id === draft?.id), [flows, draft]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const results = await Promise.all([api.get("/voice/flows"), api.get("/voice/queues"), api.get("/voice/campaigns"), api.get("/voice/calls"), api.get("/voice/overview"), api.get("/contacts")]);
@@ -100,9 +100,9 @@ export default function CallsIvr() {
       if (!draft && results[0].data[0]) setDraft(results[0].data[0]);
     } catch (error) { toast.error(error.response?.data?.detail || "Unable to load voice workspace"); }
     setLoading(false);
-  };
+  }, [draft]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
   const seed = async () => { try { const { data } = await api.post("/voice/flows/seed"); setDraft(data.flow); toast.success(data.created ? "Starter IVR created" : "Starter IVR opened"); await load(); setTab("flows"); } catch (error) { toast.error(error.response?.data?.detail || "Could not create starter flow"); } };
   const saveFlow = async () => { if (!draft?.name?.trim()) return toast.error("Give this flow a name first"); try { const { data } = draft.id ? await api.put(`/voice/flows/${draft.id}`, draft) : await api.post("/voice/flows", draft); setDraft(data); toast.success("IVR flow saved"); await load(); } catch (error) { toast.error(error.response?.data?.detail || "Could not save flow"); } };
