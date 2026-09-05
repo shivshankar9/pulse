@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.responses import Response, PlainTextResponse
 import csv
@@ -21,6 +21,7 @@ import jwt
 from cryptography.fernet import Fernet
 from openai import AsyncOpenAI
 import httpx
+import telephony
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -50,10 +51,7 @@ else:
             maxPoolSize=10,  # Increased pool size
             minPoolSize=2,
             retryWrites=True,
-            # Let MongoDB Atlas handle SSL automatically
-            tls=True,
-            tlsAllowInvalidCertificates=False,
-            tlsAllowInvalidHostnames=False,
+            **({"tls": True, "tlsAllowInvalidCertificates": False, "tlsAllowInvalidHostnames": False} if mongo_url.startswith("mongodb+srv://") else {}),
         )
         
         logging.info("✅ MongoDB Atlas client configured successfully")
@@ -2100,28 +2098,41 @@ async def create_voice_campaign(payload: VoiceCampaignIn, user=Depends(require_p
 
 
 @api_router.post("/voice/campaigns/{campaign_id}/launch")
-async def launch_voice_campaign(campaign_id: str, user=Depends(require_permission("activities.write"))):
+async def launch_voice_campaign(campaign_id: str, request: Request, background: BackgroundTasks, user=Depends(require_permission("activities.write"))):
     campaign = await db.voice_campaigns.find_one({"id": campaign_id, "owner_id": user["id"]}, {"_id": 0})
     if not campaign:
         raise HTTPException(404, "Campaign not found")
     if campaign.get("status") == "active":
         raise HTTPException(400, "Campaign is already active")
     contacts = await db.contacts.find({"owner_id": user["id"], "id": {"$in": campaign.get("contact_ids", [])}}, {"_id": 0}).to_list(100)
+    settings = await telephony.get_settings(user["id"], decrypt=True)
+    real = telephony.provider_ready(settings)
     created = []
     for contact in contacts:
         if not contact.get("phone"):
             continue
         call = {
-            "id": str(uuid.uuid4()), "owner_id": user["id"], "direction": "outbound", "provider": "self_hosted_simulator",
-            "status": "queued", "from": campaign.get("caller_id") or "main-line", "to": contact["phone"],
-            "contact_id": contact["id"], "campaign_id": campaign_id, "flow_id": campaign.get("flow_id"),
-            "initiated_at": now_utc_iso(), "recording_urls": [], "recording_available": False, "attempt": 1,
+            "id": str(uuid.uuid4()), "owner_id": user["id"], "direction": "outbound", "provider": settings["provider"] if real else "self_hosted_simulator",
+            "status": "queued", "from": (settings["credentials"].get("phone_number") if real else campaign.get("caller_id")) or "main-line", "to": telephony._e164(contact["phone"]) if real else contact["phone"],
+            "contact_id": contact["id"], "contact_name": contact.get("name"), "campaign_id": campaign_id, "flow_id": campaign.get("flow_id"),
+            "mode": "flow" if campaign.get("flow_id") else "agent", "agent_user_id": user["id"],
+            "initiated_at": now_utc_iso(), "recording_urls": [], "recording_available": False, "attempt": 1, "ivr_path": [],
         }
         await db.voice_calls.insert_one(call)
         call.pop("_id", None)
         created.append(call)
-    await db.voice_campaigns.update_one({"id": campaign_id}, {"$set": {"status": "active", "updated_at": now_utc_iso(), "launched_at": now_utc_iso()}})
-    return {"ok": True, "queued": len(created), "calls": created}
+    await db.voice_campaigns.update_one({"id": campaign_id}, {"$set": {"status": "active", "updated_at": now_utc_iso(), "launched_at": now_utc_iso(), "mode": "real" if real else "simulator"}})
+    if real:
+        base = telephony.public_base(request)
+        async def _dial_all():
+            for call in created:
+                try:
+                    await telephony.place_call(settings, call, base)
+                except Exception as exc:
+                    logging.warning("campaign dial failed for %s: %s", call["to"], exc)
+                await asyncio.sleep(2)
+        background.add_task(_dial_all)
+    return {"ok": True, "queued": len(created), "calls": created, "mode": "real" if real else "simulator"}
 
 
 @api_router.get("/voice/overview")
@@ -2130,10 +2141,17 @@ async def voice_overview(user=Depends(get_current_user)):
     completed = [call for call in calls if call.get("status") == "completed"]
     connected = [call for call in calls if call.get("status") in {"connected", "completed"}]
     durations = [call.get("duration_seconds", 0) for call in completed if call.get("duration_seconds") is not None]
+    settings = await telephony.get_settings(user["id"])
+    ready = telephony.provider_ready(settings)
     return {
-        "mode": "self_hosted_simulator",
-        "provider_ready": False,
-        "provider_message": "Local IVR engine is active. Connect a SIP trunk later to reach public phone networks.",
+        "mode": settings.get("provider") if ready else "self_hosted_simulator",
+        "provider": settings.get("provider", "none"),
+        "provider_ready": ready,
+        "softphone_ready": telephony.softphone_ready(settings),
+        "live_calls": len([c for c in calls if c.get("status") in {"queued", "ringing", "connected"} and c.get("provider") != "self_hosted_simulator"]),
+        "real_calls": len([c for c in calls if c.get("provider") != "self_hosted_simulator"]),
+        "recordings": len([c for c in calls if c.get("recording_available")]),
+        "provider_message": f"{telephony.PROVIDERS[settings['provider']]['label']} is connected. Inbound and outbound calls reach real phone networks." if ready else "Local IVR engine is active. Connect Twilio, Telnyx or Plivo in the Telephony tab to reach public phone networks.",
         "calls_total": len(calls), "inbound": len([c for c in calls if c.get("direction") == "inbound"]),
         "outbound": len([c for c in calls if c.get("direction") == "outbound"]), "connected": len(connected),
         "answer_rate": round((len(connected) / len(calls)) * 100) if calls else 0,
@@ -2365,99 +2383,6 @@ async def webhook_whatsapp_business(owner_id: str, request: Request):
         logging.error(f"📋 Request data: {await request.body()}")
         return {"error": str(e)}
 
-@api_router.post("/webhooks/{channel}/{owner_id}")
-async def webhook_inbound(channel: str, owner_id: str, request: Request):
-    """Generic inbound webhook. Operator points provider here.
-    URL pattern: /api/webhooks/{channel}/{owner_id}
-    Channels supported: resend, whatsapp, voice
-    """
-    from fastapi import Request
-    raw = await request.body()
-    headers = dict(request.headers)
-    try:
-        data = await request.json()
-    except Exception:
-        try:
-            form = await request.form()
-            data = dict(form)
-        except Exception:
-            data = {}
-
-    if channel == "resend":
-        # Resend delivery events and inbound receiving events share this endpoint.
-        event_type = data.get("type", "unknown")
-        event_data = data.get("data") or {}
-        event_id = data.get("id") or event_data.get("email_id") or event_data.get("id")
-        if event_id and await db.webhook_events.find_one({"owner_id": owner_id, "channel": channel, "event_id": event_id}, {"_id": 1}):
-            return {"ok": True, "duplicate": True}
-        message_id = event_data.get("email_id") or event_data.get("id")
-        if event_type in ("email.received", "email.inbound", "email.received_email"):
-            from_email = event_data.get("from") or event_data.get("from_email") or ""
-            to_email = event_data.get("to") or event_data.get("to_email") or ""
-            if isinstance(to_email, list):
-                to_email = to_email[0] if to_email else ""
-            subject = event_data.get("subject") or "(no subject)"
-            body = event_data.get("text") or event_data.get("body") or event_data.get("html") or ""
-            inbound_id = message_id or event_id or str(uuid.uuid4())
-            if not await db.emails.find_one({"owner_id": owner_id, "provider_message_id": inbound_id}, {"_id": 1}):
-                contact = await db.contacts.find_one({"email": str(from_email).lower(), "owner_id": owner_id}, {"_id": 0, "id": 1})
-                await db.emails.insert_one({
-                    "id": str(uuid.uuid4()), "owner_id": owner_id, "direction": "inbound",
-                    "from_email": from_email, "to": to_email, "subject": subject, "body": body,
-                    "provider": "resend", "provider_message_id": inbound_id, "contact_id": contact.get("id") if contact else None,
-                    "read": False, "received_at": now_utc_iso(), "created_at": now_utc_iso(),
-                })
-        elif event_type == "email.opened" and message_id:
-            await db.emails.update_one({"id": message_id, "owner_id": owner_id}, {"$set": {"opened": True, "opened_at": now_utc_iso()}})
-        await db.webhook_events.insert_one({
-            "id": str(uuid.uuid4()), "event_id": event_id, "owner_id": owner_id, "channel": channel,
-            "event_type": event_type, "payload": data, "received_at": now_utc_iso(),
-        })
-        return {"ok": True}
-
-    if channel == "whatsapp":
-        # Twilio WhatsApp inbound
-        from_number = (data.get("From") or "").replace("whatsapp:", "")
-        body = data.get("Body", "")
-        sid = data.get("MessageSid")
-        # If status callback (delivered/read) update existing message
-        status_v = data.get("MessageStatus")
-        if status_v and sid:
-            await db.messages.update_one({"sid": sid}, {"$set": {"status": status_v, "updated_at": now_utc_iso()}})
-        else:
-            # New inbound message → create a ticket on first contact
-            contact = await db.contacts.find_one({"phone": from_number, "owner_id": owner_id}, {"_id": 0})
-            await db.messages.insert_one({
-                "id": str(uuid.uuid4()), "owner_id": owner_id, "channel": "whatsapp", "direction": "inbound",
-                "from": from_number, "body": body, "sid": sid, "received_at": now_utc_iso(),
-                "contact_id": contact["id"] if contact else None,
-            })
-            await db.tickets.insert_one({
-                "id": str(uuid.uuid4()), "owner_id": owner_id, "subject": f"WhatsApp: {body[:60]}",
-                "description": body, "channel": "whatsapp", "status": "open", "priority": "medium",
-                "contact_id": contact["id"] if contact else None,
-                "requester_name": contact["name"] if contact else from_number,
-                "requester_email": contact.get("email") if contact else None,
-                "comments": [], "created_at": now_utc_iso(), "updated_at": now_utc_iso(),
-            })
-        return {"ok": True}
-
-    if channel == "voice":
-        # Twilio voice status / recording callback
-        sid = data.get("CallSid")
-        recording_url = data.get("RecordingUrl")
-        status_v = data.get("CallStatus")
-        if sid and recording_url:
-            await db.voice_calls.update_one({"sid": sid}, {"$push": {"recording_urls": {"url": recording_url, "completed_at": now_utc_iso()}}})
-        if sid and status_v:
-            await db.voice_calls.update_one({"sid": sid}, {"$set": {"status": status_v}})
-        return {"ok": True}
-
-    return {"ok": True, "channel": channel, "stored": True}
-
-# ---------- Mount ----------
-
-# ---------- Invitations ----------
 class InviteIn(BaseModel):
     email: EmailStr
     role: str = "agent"
@@ -3504,6 +3429,7 @@ async def create_ticket_from_email(email_id: str, user=Depends(get_current_user)
         }
         
         await db.tickets.insert_one(ticket_doc)
+        ticket_doc.pop("_id", None)
         return {"ok": True, "ticket_id": ticket_id, "ticket": ticket_doc}
         
     except Exception as e:
@@ -3663,109 +3589,6 @@ async def debug_messages(owner_id: str):
         }
     except Exception as e:
         return {"error": str(e)}
-    """Webhook for WhatsApp Business API (Meta)"""
-    try:
-        # Log that webhook was called
-        logging.info(f"🔔 WhatsApp webhook called for user: {owner_id}")
-        
-        data = await request.json()
-        logging.info(f"📥 WhatsApp webhook received: {json.dumps(data, indent=2)}")
-        
-        # Process incoming message
-        if data.get("object") == "whatsapp_business_account":
-            logging.info(f"✅ Valid WhatsApp Business webhook object")
-            for entry in data.get("entry", []):
-                logging.info(f"📋 Processing entry: {entry}")
-                for change in entry.get("changes", []):
-                    value = change.get("value", {})
-                    logging.info(f"🔄 Processing change value: {value}")
-                    
-                    # Check for messages
-                    messages = value.get("messages", [])
-                    logging.info(f"📱 Found {len(messages)} messages in webhook")
-                    
-                    # Incoming message
-                    for message in messages:
-                        from_number = message.get("from")
-                        text_obj = message.get("text", {})
-                        text = text_obj.get("body", "") if text_obj else ""
-                        message_id = message.get("id")
-                        
-                        logging.info(f"📨 Processing inbound message: from={from_number}, text='{text}', id={message_id}")
-                        
-                        if not from_number or not text:
-                            logging.warning(f"⚠️ Skipping message with missing data: from={from_number}, text='{text}'")
-                            continue
-                        
-                        # Find or create contact
-                        contact = await db.contacts.find_one(
-                            {"phone": from_number, "owner_id": owner_id}, 
-                            {"_id": 0}
-                        )
-                        
-                        # Log message
-                        message_doc = {
-                            "id": str(uuid.uuid4()),
-                            "owner_id": owner_id,
-                            "channel": "whatsapp_business",
-                            "direction": "inbound",
-                            "from": from_number,
-                            "body": text,
-                            "message_id": message_id,
-                            "received_at": now_utc_iso(),
-                            "contact_id": contact["id"] if contact else None,
-                            "provider": "whatsapp_business",
-                            "read": False
-                        }
-                        
-                        await db.messages.insert_one(message_doc)
-                        logging.info(f"✅ Stored inbound message: {message_doc['id']} - '{text}'")
-                        
-                        # Auto-create ticket
-                        ticket_doc = {
-                            "id": str(uuid.uuid4()),
-                            "owner_id": owner_id,
-                            "subject": f"WhatsApp: {text[:60]}",
-                            "description": text,
-                            "channel": "whatsapp",
-                            "status": "open",
-                            "priority": "medium",
-                            "contact_id": contact["id"] if contact else None,
-                            "requester_name": contact["name"] if contact else from_number,
-                            "requester_email": contact.get("email") if contact else None,
-                            "comments": [],
-                            "created_at": now_utc_iso(),
-                            "updated_at": now_utc_iso(),
-                        }
-                        
-                        await db.tickets.insert_one(ticket_doc)
-                        logging.info(f"🎫 Created ticket: {ticket_doc['id']}")
-                    
-                    # Check for status updates
-                    statuses = value.get("statuses", [])
-                    if statuses:
-                        logging.info(f"📊 Found {len(statuses)} status updates")
-                        for status in statuses:
-                            message_id = status.get("id")
-                            status_value = status.get("status")
-                            logging.info(f"📈 Status update: {message_id} -> {status_value}")
-                            
-                            # Update message status
-                            await db.messages.update_one(
-                                {"message_id": message_id, "owner_id": owner_id},
-                                {"$set": {"status": status_value, "updated_at": now_utc_iso()}}
-                            )
-        else:
-            logging.warning(f"⚠️ Unknown webhook object type: {data.get('object')}")
-        
-        logging.info(f"✅ Webhook processing completed successfully")
-        return {"ok": True}
-        
-    except Exception as e:
-        logging.error(f"❌ WhatsApp webhook processing failed: {str(e)}")
-        logging.error(f"📋 Request data: {await request.body()}")
-        return {"error": str(e)}
-
 
 # ---------- Debug Endpoints ----------
 
@@ -4945,7 +4768,6 @@ async def create_ticket_from_whatsapp(phone: str, payload: WhatsAppCreateTicketI
 
 
 # ---------- Mount ----------
-app.include_router(api_router)
 
 # ---------- Dynamic CORS Middleware ----------
 async def get_allowed_origins():
@@ -5414,3 +5236,104 @@ async def send_competitor_alert(competitor_data):
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+# Generic catch-all webhook — registered last so literal /webhooks/* routes take precedence
+@api_router.post("/webhooks/{channel}/{owner_id}")
+async def webhook_inbound(channel: str, owner_id: str, request: Request):
+    """Generic inbound webhook. Operator points provider here.
+    URL pattern: /api/webhooks/{channel}/{owner_id}
+    Channels supported: resend, whatsapp, voice
+    """
+    from fastapi import Request
+    raw = await request.body()
+    headers = dict(request.headers)
+    try:
+        data = await request.json()
+    except Exception:
+        try:
+            form = await request.form()
+            data = dict(form)
+        except Exception:
+            data = {}
+
+    if channel == "resend":
+        # Resend delivery events and inbound receiving events share this endpoint.
+        event_type = data.get("type", "unknown")
+        event_data = data.get("data") or {}
+        event_id = data.get("id") or event_data.get("email_id") or event_data.get("id")
+        if event_id and await db.webhook_events.find_one({"owner_id": owner_id, "channel": channel, "event_id": event_id}, {"_id": 1}):
+            return {"ok": True, "duplicate": True}
+        message_id = event_data.get("email_id") or event_data.get("id")
+        if event_type in ("email.received", "email.inbound", "email.received_email"):
+            from_email = event_data.get("from") or event_data.get("from_email") or ""
+            to_email = event_data.get("to") or event_data.get("to_email") or ""
+            if isinstance(to_email, list):
+                to_email = to_email[0] if to_email else ""
+            subject = event_data.get("subject") or "(no subject)"
+            body = event_data.get("text") or event_data.get("body") or event_data.get("html") or ""
+            inbound_id = message_id or event_id or str(uuid.uuid4())
+            if not await db.emails.find_one({"owner_id": owner_id, "provider_message_id": inbound_id}, {"_id": 1}):
+                contact = await db.contacts.find_one({"email": str(from_email).lower(), "owner_id": owner_id}, {"_id": 0, "id": 1})
+                await db.emails.insert_one({
+                    "id": str(uuid.uuid4()), "owner_id": owner_id, "direction": "inbound",
+                    "from_email": from_email, "to": to_email, "subject": subject, "body": body,
+                    "provider": "resend", "provider_message_id": inbound_id, "contact_id": contact.get("id") if contact else None,
+                    "read": False, "received_at": now_utc_iso(), "created_at": now_utc_iso(),
+                })
+        elif event_type == "email.opened" and message_id:
+            await db.emails.update_one({"id": message_id, "owner_id": owner_id}, {"$set": {"opened": True, "opened_at": now_utc_iso()}})
+        await db.webhook_events.insert_one({
+            "id": str(uuid.uuid4()), "event_id": event_id, "owner_id": owner_id, "channel": channel,
+            "event_type": event_type, "payload": data, "received_at": now_utc_iso(),
+        })
+        return {"ok": True}
+
+    if channel == "whatsapp":
+        # Twilio WhatsApp inbound
+        from_number = (data.get("From") or "").replace("whatsapp:", "")
+        body = data.get("Body", "")
+        sid = data.get("MessageSid")
+        # If status callback (delivered/read) update existing message
+        status_v = data.get("MessageStatus")
+        if status_v and sid:
+            await db.messages.update_one({"sid": sid}, {"$set": {"status": status_v, "updated_at": now_utc_iso()}})
+        else:
+            # New inbound message → create a ticket on first contact
+            contact = await db.contacts.find_one({"phone": from_number, "owner_id": owner_id}, {"_id": 0})
+            await db.messages.insert_one({
+                "id": str(uuid.uuid4()), "owner_id": owner_id, "channel": "whatsapp", "direction": "inbound",
+                "from": from_number, "body": body, "sid": sid, "received_at": now_utc_iso(),
+                "contact_id": contact["id"] if contact else None,
+            })
+            await db.tickets.insert_one({
+                "id": str(uuid.uuid4()), "owner_id": owner_id, "subject": f"WhatsApp: {body[:60]}",
+                "description": body, "channel": "whatsapp", "status": "open", "priority": "medium",
+                "contact_id": contact["id"] if contact else None,
+                "requester_name": contact["name"] if contact else from_number,
+                "requester_email": contact.get("email") if contact else None,
+                "comments": [], "created_at": now_utc_iso(), "updated_at": now_utc_iso(),
+            })
+        return {"ok": True}
+
+    if channel == "voice":
+        # Twilio voice status / recording callback
+        sid = data.get("CallSid")
+        recording_url = data.get("RecordingUrl")
+        status_v = data.get("CallStatus")
+        if sid and recording_url:
+            await db.voice_calls.update_one({"sid": sid}, {"$push": {"recording_urls": {"url": recording_url, "completed_at": now_utc_iso()}}})
+        if sid and status_v:
+            await db.voice_calls.update_one({"sid": sid}, {"$set": {"status": status_v}})
+        return {"ok": True}
+
+    return {"ok": True, "channel": channel, "stored": True}
+
+# ---------- Mount ----------
+
+# ---------- Invitations ----------
+
+telephony.init(db=db, get_current_user=get_current_user, require_permission=require_permission, encrypt_secret=encrypt_secret, decrypt_secret=decrypt_secret, now_utc_iso=now_utc_iso, mask=mask)
+telephony.build_routes()
+api_router.include_router(telephony.router)
+app.include_router(api_router)

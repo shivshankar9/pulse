@@ -2,6 +2,13 @@
 
 A modern Customer Relationship Management system built with React and FastAPI.
 
+## 📞 Real telephony & self-hosted IVR
+Pulse ships its own IVR engine (menus, queues, voicemail, business hours, outbound campaigns, recordings, browser softphone).
+Connect **Twilio, Telnyx or Plivo** in *Calls & IVR → Telephony* to place and receive real phone calls.
+
+- **[docs/TELEPHONY_SETUP.md](docs/TELEPHONY_SETUP.md)** — how to create the carrier account, buy a number, where every credential lives, which webhook URLs to paste, `.env` keys, test procedure and go-live checklist.
+- **[docs/SELF_HOSTED_DEPLOYMENT.md](docs/SELF_HOSTED_DEPLOYMENT.md)** — Docker Compose / VM / Kubernetes deployment for enterprise customers, security hardening and multi-tenant notes.
+
 ## Features
 - Contact management
 - Deal pipeline tracking

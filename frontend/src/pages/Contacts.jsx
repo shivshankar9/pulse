@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
-import { Plus, Sparkles, Trash2, X, Upload, Search, Save, Bookmark, Users } from "lucide-react";
+import { Plus, Sparkles, Trash2, X, Upload, Search, Save, Bookmark, Users, Phone } from "lucide-react";
+import { dialNumber } from "../lib/dialer";
 import { toast } from "sonner";
 
 const emptyForm = { name: "", email: "", phone: "", company: "", title: "", status: "lead", source: "", notes: "", tags: [] };
@@ -296,6 +297,7 @@ const Contacts = () => {
                                 </td>
                                 <td className="px-6 py-4">
                                     <div className="flex gap-2">
+                                        {c.phone && <button data-testid={`contact-call-btn-${c.id}`} onClick={() => dialNumber({ to: c.phone, contactId: c.id, name: c.name })} title={`Call ${c.phone}`} className="p-2 rounded-lg border-2 border-emerald-500 text-emerald-600 hover:bg-emerald-50 transition-colors"><Phone className="w-4 h-4" /></button>}
                                         <button
                                             data-testid={`contact-score-btn-${c.id}`}
                                             onClick={() => scoreLead(c.id)}
