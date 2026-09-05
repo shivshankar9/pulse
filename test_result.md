@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Complete WhatsApp integration to let businesses manage their WhatsApp chat support — inbox UI, threaded conversations, reply composer, Meta Business API + Twilio support, webhook setup helper, demo mode."
+user_problem_statement: "Build a self-hosted enterprise IVR workspace with inbound and outbound call orchestration, visual flows, queues, campaigns, and a provider-neutral simulator without SIP credentials."
 
 backend:
   - task: "Presence heartbeat + online users list"
@@ -258,7 +258,37 @@ backend:
         agent: "testing"
         comment: "✅ All Meta WhatsApp Business test endpoint tests passed (4 tests). POST /api/whatsapp-business/test returns 400 with 'credentials incomplete' when no config. PUT /api/integrations/whatsapp_business saves fake credentials successfully. POST /api/whatsapp-business/test with fake credentials correctly returns 400 with Meta API rejection message (Invalid OAuth access token). POST /api/integrations/whatsapp_business/test also correctly rejects fake credentials with 400."
 
+  - task: "Self-hosted IVR core: flows, queues, campaigns, simulator, and analytics"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added provider-neutral IVR engine endpoints for flow CRUD/publishing/seed, queue CRUD, outbound campaign creation/launch, overview metrics, inbound/outbound call simulation, DTMF routing, and call status updates. Uses UUIDs and local self_hosted_simulator records; no real PSTN delivery is claimed without a SIP trunk."
+      - working: true
+        agent: "testing"
+        comment: "✅ ALL 16 IVR TESTS PASSED! Comprehensive end-to-end testing completed. (1) Flow seed: POST /api/voice/flows/seed is idempotent, returns starter flow with 5 nodes (greeting, menu, sales queue, support queue, voicemail) with correct routing config. (2) Flow list: GET /api/voice/flows returns array with seeded flow. (3) Flow publish: PATCH /api/voice/flows/{id}/status publishes flow and ensures only one flow remains published. (4) Inbound simulation: POST /api/voice/simulate/inbound creates call with provider=self_hosted_simulator, status=connected, starts at greeting node. (5) DTMF routing: POST /api/voice/simulate/{call_id}/input correctly routes digits 1→sales, 2→support, 0→voicemail across separate sessions. (6) Invalid DTMF: Invalid digit returns ok=false without mutating route, includes error message. (7) Outbound simulation: POST /api/voice/simulate/outbound creates ringing call with provider=self_hosted_simulator. (8) Status transitions: POST /api/voice/calls/{id}/status successfully transitions ringing→connected→completed with duration_seconds=125 and ended_at timestamp. (9) Queue CRUD: All operations working (create, list, update, delete). (10) Campaign: Created campaign with contact, launched successfully, queued call has campaign_id and provider=self_hosted_simulator. (11) Overview: GET /api/voice/overview returns mode=self_hosted_simulator, correct inbound/outbound counts (5 inbound, 3 outbound, 8 total), answer_rate=75%, active_flows=1, queues=0, campaigns=1. All functionality working as expected. Real PSTN/SIP delivery intentionally unavailable without carrier credentials (not a failure)."
+
 frontend:
+  - task: "Self-hosted IVR operations workspace"
+    implemented: true
+    working: false
+    file: "frontend/src/pages/CallsIvr.jsx"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Replaced readiness-only wizard with a voice operations dashboard: metrics, visual IVR node editor, publish controls, queue management, outbound campaigns, inbound DTMF simulator, outbound call simulator, and recent call activity."
+      - working: false
+        agent: "testing"
+        comment: "❌ CRITICAL BLOCKER: Frontend authentication is completely broken due to missing REACT_APP_BACKEND_URL environment variable in /app/frontend/.env file. API calls are failing with 404 errors to 'http://localhost:3000/undefined/api/auth/login'. Cannot test Calls & IVR page without authentication. Backend API is working correctly (verified with curl). The frontend .env file is missing and needs to be created with REACT_APP_BACKEND_URL pointing to the backend service. This blocks ALL frontend testing including: page load verification, IVR flows, simulators, queues, campaigns, settings navigation, and responsive testing."
+
   - task: "WhatsApp Inbox page (/app/whatsapp)"
     implemented: true
     working: "NA"
@@ -301,15 +331,11 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Presence heartbeat + online users list"
-    - "WhatsApp chat assignment (manual + auto-online)"
-    - "Sync WhatsApp chat to Contact (lead)"
-    - "Create ticket from WhatsApp thread"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -323,4 +349,8 @@ agent_communication:
     message: "✅ ALL 27 BACKEND TESTS PASSED! Comprehensive testing completed for all WhatsApp integration features. Test coverage: (A) WhatsApp send with mock fallback - 2 tests passed, (B) Simulated auto-reply - 1 test passed (verified inbound message with provider='mock_simulated' appears after 6 seconds), (C) Demo seed + idempotency - 2 tests passed, (D) Conversations list - 1 test passed, (E) Thread messages + mark read - 3 tests passed, (F) Delete conversation - 2 tests passed, (G) Meta WhatsApp Business test endpoint - 4 tests passed, (H) Templates CRUD + seed - 7 tests passed, (I) Send template with validation - 5 tests passed. All endpoints working correctly with proper error handling, validation, and mock fallback behavior. No issues found."
   - agent: "testing"
     message: "✅ 4 NEW FEATURES TESTED - 27 out of 29 tests passed! Registered 2 users (Agent Alpha and Agent Beta) for team testing. (1) PRESENCE HEARTBEAT: All 7 tests passed - heartbeat with/without body works, presence list shows correct online/offline status, offline endpoint works, 120-second window correctly applied. (2) CHAT ASSIGNMENT: 8 out of 9 tests passed - manual assignment works, unassign works, auto-assign picks online user with fewest assignments, auto_assigned flag set correctly, conversations-v2 enrichment works, bad user_id returns 404. Minor: couldn't test 'no agents online' scenario due to another user being online from previous session (expected behavior). (3) SYNC CONTACT: All 6 tests passed - creates new contact with 'whatsapp' and 'lead' tags, updates existing contact, backfills contact_id on messages, auto-generates name when not provided. (4) CREATE TICKET: 5 out of 6 tests passed - creates ticket with correct channel, priority, contact_id, custom.whatsapp_phone, includes conversation in description, auto-creates contact when missing, handles extra description. Minor issue: include_last_messages=0 still includes 1 message due to max(1, include_last_messages) on line 3046 of server.py - very minor edge case. ALL CORE FUNCTIONALITY WORKING CORRECTLY."
+  - agent: "testing"
+    message: "✅ SELF-HOSTED IVR TESTING COMPLETE - ALL 16 TESTS PASSED! Comprehensive end-to-end testing of the IVR engine completed successfully. Test results: (1) Flow seed endpoint is idempotent and returns correct starter flow with 5 nodes (greeting→menu→sales/support queues→voicemail) with proper routing configuration. (2) Flow list and publish endpoints working correctly, publishing ensures only one flow is published at a time. (3) Inbound call simulation creates calls with provider=self_hosted_simulator and status=connected, starts at greeting node. (4) DTMF routing works perfectly across multiple sessions - digit 1 routes to sales, digit 2 to support, digit 0 to voicemail. (5) Invalid DTMF digits correctly return ok=false without mutating the call route. (6) Outbound call simulation creates ringing calls with correct provider. (7) Call status transitions work correctly: ringing→connected→completed with duration tracking. (8) Queue CRUD operations all working (create, list, update, delete). (9) Campaign creation and launch working - queued calls have correct campaign_id and provider=self_hosted_simulator. (10) Voice overview returns all required metrics with correct values (mode=self_hosted_simulator, 8 total calls, 5 inbound, 3 outbound, 75% answer rate, 1 active flow, 1 campaign). Real PSTN/SIP delivery is intentionally unavailable without carrier credentials - this is expected and not a failure. All IVR functionality working as designed."
+  - agent: "testing"
+    message: "❌ CALLS & IVR FRONTEND TESTING BLOCKED - CRITICAL AUTHENTICATION FAILURE. Root cause identified: Missing /app/frontend/.env file with REACT_APP_BACKEND_URL environment variable. Console error shows API calls failing to 'http://localhost:3000/undefined/api/auth/login' (404). Backend API verified working correctly via curl (POST /api/auth/register returns valid token and user). Frontend authentication is completely broken - cannot login or register through UI, blocking all Calls & IVR page testing. Created /app/memory/test_credentials.md with test user (test-ivr@example.com / TestPass123!). REQUIRED FIX: Create /app/frontend/.env file with REACT_APP_BACKEND_URL pointing to backend service, then restart frontend service. Until fixed, cannot verify: page load, 'Your front desk always ready' header, 'Local engine active' badge, Overview metrics, IVR flows tab, flow editing, inbound/outbound simulators, DTMF keypad, queues tab, campaigns tab, Settings navigation, or responsive behavior."
 

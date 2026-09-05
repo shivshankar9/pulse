@@ -1859,6 +1859,365 @@ async def voice_list(user=Depends(get_current_user)):
     items = await db.voice_calls.find({"owner_id": user["id"]}, {"_id": 0}).sort("initiated_at", -1).to_list(500)
     return items
 
+# ---------- Self-hosted IVR engine ----------
+class VoiceNodeIn(BaseModel):
+    id: Optional[str] = None
+    type: Literal["greeting", "menu", "queue", "voicemail", "transfer", "play", "hangup"] = "menu"
+    label: str
+    prompt: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class VoiceFlowIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    greeting: str = "Thanks for calling. Please choose an option."
+    timezone: str = "UTC"
+    business_hours: dict = Field(default_factory=lambda: {
+        "enabled": True,
+        "days": ["mon", "tue", "wed", "thu", "fri"],
+        "start": "09:00",
+        "end": "18:00",
+        "after_hours_node": "voicemail",
+    })
+    nodes: List[VoiceNodeIn] = Field(default_factory=list)
+
+
+class VoiceFlowStatusIn(BaseModel):
+    status: Literal["draft", "published"]
+
+
+class VoiceQueueIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    strategy: Literal["round_robin", "longest_idle", "ring_all"] = "round_robin"
+    members: List[str] = Field(default_factory=list)
+    max_wait_seconds: int = Field(default=180, ge=30, le=3600)
+    voicemail_enabled: bool = True
+
+
+class VoiceCampaignIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    flow_id: Optional[str] = None
+    caller_id: Optional[str] = None
+    contact_ids: List[str] = Field(default_factory=list)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    retry_after_minutes: int = Field(default=60, ge=5, le=10080)
+
+
+class VoiceInboundSimulationIn(BaseModel):
+    from_number: str
+    to_number: Optional[str] = None
+    flow_id: Optional[str] = None
+    contact_id: Optional[str] = None
+
+
+class VoiceOutboundSimulationIn(BaseModel):
+    to_number: str
+    contact_id: Optional[str] = None
+    campaign_id: Optional[str] = None
+    flow_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class VoiceInputIn(BaseModel):
+    digits: str = Field(min_length=1, max_length=4)
+
+
+class VoiceCallStatusIn(BaseModel):
+    status: Literal["ringing", "connected", "completed", "failed", "no_answer"]
+    disposition: Optional[str] = None
+    duration_seconds: Optional[int] = Field(default=None, ge=0, le=86400)
+
+
+def _voice_nodes(nodes: List[VoiceNodeIn]) -> list:
+    output = []
+    used = set()
+    for index, node in enumerate(nodes):
+        requested = (node.id or "").strip()
+        node_id = requested if requested and requested not in used else f"node-{index + 1}"
+        used.add(node_id)
+        item = node.model_dump()
+        item["id"] = node_id
+        output.append(item)
+    return output
+
+
+def _voice_seed_nodes() -> list:
+    return [
+        {"id": "greeting", "type": "greeting", "label": "Welcome", "prompt": "Thanks for calling. Please choose an option.", "config": {"next": "main-menu"}},
+        {"id": "main-menu", "type": "menu", "label": "Main menu", "prompt": "Press 1 for sales, 2 for support, or 0 to leave a message.", "config": {"routes": {"1": "sales", "2": "support", "0": "voicemail"}}},
+        {"id": "sales", "type": "queue", "label": "Sales queue", "prompt": "Please hold while we connect you with sales.", "config": {"queue": "sales"}},
+        {"id": "support", "type": "queue", "label": "Support queue", "prompt": "Please hold while we connect you with support.", "config": {"queue": "support"}},
+        {"id": "voicemail", "type": "voicemail", "label": "Voicemail", "prompt": "Please leave a message after the tone.", "config": {"max_seconds": 120}},
+    ]
+
+
+async def _voice_flow_for_user(flow_id: Optional[str], owner_id: str, published_only: bool = False):
+    query = {"owner_id": owner_id}
+    if flow_id:
+        query["id"] = flow_id
+    elif published_only:
+        query["status"] = "published"
+    flow = await db.voice_flows.find_one(query, {"_id": 0}, sort=[("published_at", -1), ("created_at", -1)])
+    if not flow:
+        raise HTTPException(404, "No IVR flow found. Create or seed a flow first.")
+    return flow
+
+
+def _voice_node(flow: dict, node_id: Optional[str]):
+    for node in flow.get("nodes", []):
+        if node.get("id") == node_id:
+            return node
+    return None
+
+
+def _voice_next_node(flow: dict, node: dict, digits: str):
+    routes = (node.get("config") or {}).get("routes") or {}
+    target = routes.get(digits) or routes.get("default")
+    return _voice_node(flow, target) if target else None
+
+
+@api_router.get("/voice/flows")
+async def voice_flows(user=Depends(get_current_user)):
+    return await db.voice_flows.find({"owner_id": user["id"]}, {"_id": 0}).sort("updated_at", -1).to_list(100)
+
+
+@api_router.post("/voice/flows")
+async def create_voice_flow(payload: VoiceFlowIn, user=Depends(require_permission("settings.manage"))):
+    nodes = _voice_nodes(payload.nodes or [VoiceNodeIn(**node) for node in _voice_seed_nodes()])
+    doc = {
+        "id": str(uuid.uuid4()), "owner_id": user["id"], "name": payload.name.strip(),
+        "description": payload.description, "greeting": payload.greeting, "timezone": payload.timezone,
+        "business_hours": payload.business_hours, "nodes": nodes, "status": "draft", "version": 1,
+        "created_at": now_utc_iso(), "updated_at": now_utc_iso(), "published_at": None,
+    }
+    if not doc["name"]:
+        raise HTTPException(400, "Flow name is required")
+    await db.voice_flows.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/voice/flows/seed")
+async def seed_voice_flow(user=Depends(require_permission("settings.manage"))):
+    existing = await db.voice_flows.find_one({"owner_id": user["id"], "name": "Main line starter"}, {"_id": 0})
+    if existing:
+        return {"created": False, "flow": existing}
+    payload = VoiceFlowIn(name="Main line starter", description="A production-friendly starting point for sales, support, and voicemail.", nodes=[VoiceNodeIn(**node) for node in _voice_seed_nodes()])
+    return {"created": True, "flow": await create_voice_flow(payload, user)}
+
+
+@api_router.get("/voice/flows/{flow_id}")
+async def get_voice_flow(flow_id: str, user=Depends(get_current_user)):
+    flow = await db.voice_flows.find_one({"id": flow_id, "owner_id": user["id"]}, {"_id": 0})
+    if not flow:
+        raise HTTPException(404, "IVR flow not found")
+    return flow
+
+
+@api_router.put("/voice/flows/{flow_id}")
+async def update_voice_flow(flow_id: str, payload: VoiceFlowIn, user=Depends(require_permission("settings.manage"))):
+    existing = await db.voice_flows.find_one({"id": flow_id, "owner_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "IVR flow not found")
+    update = payload.model_dump()
+    update["name"] = update["name"].strip()
+    update["nodes"] = _voice_nodes(payload.nodes)
+    update.update({"version": existing.get("version", 1) + 1, "updated_at": now_utc_iso()})
+    await db.voice_flows.update_one({"id": flow_id, "owner_id": user["id"]}, {"$set": update})
+    return await db.voice_flows.find_one({"id": flow_id}, {"_id": 0})
+
+
+@api_router.patch("/voice/flows/{flow_id}/status")
+async def update_voice_flow_status(flow_id: str, payload: VoiceFlowStatusIn, user=Depends(require_permission("settings.manage"))):
+    existing = await db.voice_flows.find_one({"id": flow_id, "owner_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "IVR flow not found")
+    update = {"status": payload.status, "updated_at": now_utc_iso()}
+    if payload.status == "published":
+        update["published_at"] = now_utc_iso()
+        await db.voice_flows.update_many({"owner_id": user["id"], "id": {"$ne": flow_id}}, {"$set": {"status": "draft"}})
+    await db.voice_flows.update_one({"id": flow_id, "owner_id": user["id"]}, {"$set": update})
+    return await db.voice_flows.find_one({"id": flow_id}, {"_id": 0})
+
+
+@api_router.delete("/voice/flows/{flow_id}")
+async def delete_voice_flow(flow_id: str, user=Depends(require_permission("settings.manage"))):
+    result = await db.voice_flows.delete_one({"id": flow_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "IVR flow not found")
+    return {"ok": True}
+
+
+@api_router.get("/voice/queues")
+async def voice_queues(user=Depends(get_current_user)):
+    return await db.voice_queues.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(100)
+
+
+@api_router.post("/voice/queues")
+async def create_voice_queue(payload: VoiceQueueIn, user=Depends(require_permission("settings.manage"))):
+    doc = {**payload.model_dump(), "id": str(uuid.uuid4()), "owner_id": user["id"], "created_at": now_utc_iso(), "updated_at": now_utc_iso()}
+    await db.voice_queues.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.put("/voice/queues/{queue_id}")
+async def update_voice_queue(queue_id: str, payload: VoiceQueueIn, user=Depends(require_permission("settings.manage"))):
+    result = await db.voice_queues.update_one({"id": queue_id, "owner_id": user["id"]}, {"$set": {**payload.model_dump(), "updated_at": now_utc_iso()}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Queue not found")
+    return await db.voice_queues.find_one({"id": queue_id}, {"_id": 0})
+
+
+@api_router.delete("/voice/queues/{queue_id}")
+async def delete_voice_queue(queue_id: str, user=Depends(require_permission("settings.manage"))):
+    result = await db.voice_queues.delete_one({"id": queue_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Queue not found")
+    return {"ok": True}
+
+
+@api_router.get("/voice/campaigns")
+async def voice_campaigns(user=Depends(get_current_user)):
+    campaigns = await db.voice_campaigns.find({"owner_id": user["id"]}, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    for campaign in campaigns:
+        campaign["call_count"] = await db.voice_calls.count_documents({"owner_id": user["id"], "campaign_id": campaign["id"]})
+    return campaigns
+
+
+@api_router.post("/voice/campaigns")
+async def create_voice_campaign(payload: VoiceCampaignIn, user=Depends(require_permission("activities.write"))):
+    if payload.flow_id:
+        await _voice_flow_for_user(payload.flow_id, user["id"])
+    doc = {**payload.model_dump(), "id": str(uuid.uuid4()), "owner_id": user["id"], "status": "draft", "created_at": now_utc_iso(), "updated_at": now_utc_iso()}
+    await db.voice_campaigns.insert_one(doc)
+    doc.pop("_id", None)
+    doc["call_count"] = 0
+    return doc
+
+
+@api_router.post("/voice/campaigns/{campaign_id}/launch")
+async def launch_voice_campaign(campaign_id: str, user=Depends(require_permission("activities.write"))):
+    campaign = await db.voice_campaigns.find_one({"id": campaign_id, "owner_id": user["id"]}, {"_id": 0})
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    if campaign.get("status") == "active":
+        raise HTTPException(400, "Campaign is already active")
+    contacts = await db.contacts.find({"owner_id": user["id"], "id": {"$in": campaign.get("contact_ids", [])}}, {"_id": 0}).to_list(100)
+    created = []
+    for contact in contacts:
+        if not contact.get("phone"):
+            continue
+        call = {
+            "id": str(uuid.uuid4()), "owner_id": user["id"], "direction": "outbound", "provider": "self_hosted_simulator",
+            "status": "queued", "from": campaign.get("caller_id") or "main-line", "to": contact["phone"],
+            "contact_id": contact["id"], "campaign_id": campaign_id, "flow_id": campaign.get("flow_id"),
+            "initiated_at": now_utc_iso(), "recording_urls": [], "recording_available": False, "attempt": 1,
+        }
+        await db.voice_calls.insert_one(call)
+        call.pop("_id", None)
+        created.append(call)
+    await db.voice_campaigns.update_one({"id": campaign_id}, {"$set": {"status": "active", "updated_at": now_utc_iso(), "launched_at": now_utc_iso()}})
+    return {"ok": True, "queued": len(created), "calls": created}
+
+
+@api_router.get("/voice/overview")
+async def voice_overview(user=Depends(get_current_user)):
+    calls = await db.voice_calls.find({"owner_id": user["id"]}, {"_id": 0}).to_list(5000)
+    completed = [call for call in calls if call.get("status") == "completed"]
+    connected = [call for call in calls if call.get("status") in {"connected", "completed"}]
+    durations = [call.get("duration_seconds", 0) for call in completed if call.get("duration_seconds") is not None]
+    return {
+        "mode": "self_hosted_simulator",
+        "provider_ready": False,
+        "provider_message": "Local IVR engine is active. Connect a SIP trunk later to reach public phone networks.",
+        "calls_total": len(calls), "inbound": len([c for c in calls if c.get("direction") == "inbound"]),
+        "outbound": len([c for c in calls if c.get("direction") == "outbound"]), "connected": len(connected),
+        "answer_rate": round((len(connected) / len(calls)) * 100) if calls else 0,
+        "avg_duration_seconds": round(sum(durations) / len(durations)) if durations else 0,
+        "active_flows": await db.voice_flows.count_documents({"owner_id": user["id"], "status": "published"}),
+        "queues": await db.voice_queues.count_documents({"owner_id": user["id"]}),
+        "campaigns": await db.voice_campaigns.count_documents({"owner_id": user["id"]}),
+    }
+
+
+@api_router.post("/voice/simulate/inbound")
+async def simulate_inbound_voice(payload: VoiceInboundSimulationIn, user=Depends(require_permission("activities.write"))):
+    flow = await _voice_flow_for_user(payload.flow_id, user["id"], published_only=not payload.flow_id)
+    first = flow.get("nodes", [])[0] if flow.get("nodes") else None
+    if not first:
+        raise HTTPException(400, "IVR flow has no nodes")
+    call = {
+        "id": str(uuid.uuid4()), "owner_id": user["id"], "direction": "inbound", "provider": "self_hosted_simulator",
+        "status": "connected", "from": payload.from_number, "to": payload.to_number or "main-line", "flow_id": flow["id"],
+        "flow_name": flow["name"], "current_node_id": first["id"], "current_prompt": first.get("prompt") or flow.get("greeting"),
+        "collected_digits": [], "contact_id": payload.contact_id, "started_at": now_utc_iso(), "connected_at": now_utc_iso(),
+        "ended_at": None, "duration_seconds": None, "recording_urls": [], "recording_available": False, "disposition": "ivr_started",
+    }
+    await db.voice_calls.insert_one(call)
+    call.pop("_id", None)
+    return {"call": call, "node": first, "mode": "self_hosted_simulator"}
+
+
+@api_router.post("/voice/simulate/outbound")
+async def simulate_outbound_voice(payload: VoiceOutboundSimulationIn, user=Depends(require_permission("activities.write"))):
+    contact = None
+    if payload.contact_id:
+        contact = await db.contacts.find_one({"id": payload.contact_id, "owner_id": user["id"]}, {"_id": 0})
+        if not contact:
+            raise HTTPException(404, "Contact not found")
+    call = {
+        "id": str(uuid.uuid4()), "owner_id": user["id"], "direction": "outbound", "provider": "self_hosted_simulator",
+        "status": "ringing", "from": "main-line", "to": payload.to_number, "contact_id": payload.contact_id,
+        "campaign_id": payload.campaign_id, "flow_id": payload.flow_id, "note": payload.note,
+        "initiated_at": now_utc_iso(), "recording_urls": [], "recording_available": False, "attempt": 1,
+    }
+    await db.voice_calls.insert_one(call)
+    call.pop("_id", None)
+    return {"call": call, "contact": contact, "mode": "self_hosted_simulator"}
+
+
+@api_router.post("/voice/simulate/{call_id}/input")
+async def simulate_voice_input(call_id: str, payload: VoiceInputIn, user=Depends(require_permission("activities.write"))):
+    call = await db.voice_calls.find_one({"id": call_id, "owner_id": user["id"]}, {"_id": 0})
+    if not call:
+        raise HTTPException(404, "Call not found")
+    if call.get("direction") != "inbound" or call.get("status") in {"completed", "failed", "no_answer"}:
+        raise HTTPException(400, "This call cannot receive IVR input")
+    flow = await _voice_flow_for_user(call.get("flow_id"), user["id"])
+    current = _voice_node(flow, call.get("current_node_id"))
+    if not current or current.get("type") != "menu":
+        raise HTTPException(400, "The current IVR step is not waiting for a menu choice")
+    next_node = _voice_next_node(flow, current, payload.digits)
+    if not next_node:
+        return {"ok": False, "call": call, "message": "That choice is not available. Try another key.", "node": current}
+    update = {"$push": {"collected_digits": payload.digits}, "$set": {"current_node_id": next_node["id"], "current_prompt": next_node.get("prompt", ""), "disposition": next_node.get("type", "ivr")}}
+    if next_node.get("type") in {"queue", "voicemail", "transfer", "hangup"}:
+        update["$set"]["status"] = "completed" if next_node.get("type") == "hangup" else "connected"
+    await db.voice_calls.update_one({"id": call_id}, update)
+    updated = await db.voice_calls.find_one({"id": call_id}, {"_id": 0})
+    return {"ok": True, "call": updated, "node": next_node}
+
+
+@api_router.post("/voice/calls/{call_id}/status")
+async def update_voice_call_status(call_id: str, payload: VoiceCallStatusIn, user=Depends(require_permission("activities.write"))):
+    call = await db.voice_calls.find_one({"id": call_id, "owner_id": user["id"]}, {"_id": 0})
+    if not call:
+        raise HTTPException(404, "Call not found")
+    update = {"status": payload.status, "updated_at": now_utc_iso()}
+    if payload.disposition:
+        update["disposition"] = payload.disposition
+    if payload.duration_seconds is not None:
+        update["duration_seconds"] = payload.duration_seconds
+    if payload.status in {"completed", "failed", "no_answer"}:
+        update["ended_at"] = now_utc_iso()
+    await db.voice_calls.update_one({"id": call_id}, {"$set": update})
+    return await db.voice_calls.find_one({"id": call_id}, {"_id": 0})
+
+
 # ---------- Webhooks (inbound) ----------
 @api_router.get("/webhooks/whatsapp-business/{owner_id}")
 async def webhook_whatsapp_business_verify(owner_id: str, request: Request):
