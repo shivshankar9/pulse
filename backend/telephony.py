@@ -70,6 +70,21 @@ class VoiceSettingsIn(BaseModel):
     softphone_enabled: bool = True
     verify_signatures: bool = True
     default_flow_id: str | None = None
+    auto_ticket_missed: bool = True
+    auto_ticket_voicemail: bool = True
+
+
+class CallNotesIn(BaseModel):
+    notes: str | None = None
+    outcome: Literal["resolved", "follow_up", "no_answer", "wrong_number", "voicemail", "escalated", "sale"] | None = None
+
+
+class PresenceIn(BaseModel):
+    status: Literal["online", "away", "offline"]
+    softphone: bool = False
+
+
+PRESENCE_TTL = 90
 
 
 async def get_settings(owner_id: str, decrypt: bool = False) -> dict:
@@ -77,6 +92,8 @@ async def get_settings(owner_id: str, decrypt: bool = False) -> dict:
     doc.setdefault("record_calls", True)
     doc.setdefault("softphone_enabled", True)
     doc.setdefault("verify_signatures", True)
+    doc.setdefault("auto_ticket_missed", True)
+    doc.setdefault("auto_ticket_voicemail", True)
     creds = doc.get("credentials") or {}
     if decrypt:
         doc["credentials"] = {k: deps["decrypt_secret"](v) for k, v in creds.items()}
@@ -138,7 +155,7 @@ def build_routes():
                     encrypted[k] = old_creds[k]
                 else:
                     encrypted[k] = deps["encrypt_secret"](_e164(v) if k == "phone_number" else v)
-        doc = {"owner_id": user["id"], "provider": payload.provider, "credentials": encrypted, "agent_fallback_number": _e164(payload.agent_fallback_number) if payload.agent_fallback_number else None, "sip_transfer_domain": payload.sip_transfer_domain, "record_calls": payload.record_calls, "softphone_enabled": payload.softphone_enabled, "verify_signatures": payload.verify_signatures, "default_flow_id": payload.default_flow_id, "updated_at": _now()}
+        doc = {"owner_id": user["id"], "provider": payload.provider, "credentials": encrypted, "agent_fallback_number": _e164(payload.agent_fallback_number) if payload.agent_fallback_number else None, "sip_transfer_domain": payload.sip_transfer_domain, "record_calls": payload.record_calls, "softphone_enabled": payload.softphone_enabled, "verify_signatures": payload.verify_signatures, "default_flow_id": payload.default_flow_id, "auto_ticket_missed": payload.auto_ticket_missed, "auto_ticket_voicemail": payload.auto_ticket_voicemail, "updated_at": _now()}
         await _db().voice_settings.update_one({"owner_id": user["id"]}, {"$set": doc, "$setOnInsert": {"created_at": _now()}}, upsert=True)
         return await read_settings(request, user)
 
@@ -191,6 +208,48 @@ def build_routes():
                 log.warning("hangup failed: %s", exc)
         await _db().voice_calls.update_one({"id": call_id}, {"$set": {"status": "completed", "ended_at": _now(), "disposition": call.get("disposition") or "hung_up_by_agent"}})
         return await _db().voice_calls.find_one({"id": call_id}, {"_id": 0})
+
+    @router.patch("/voice/calls/{call_id}/notes")
+    async def save_call_notes(call_id: str, payload: CallNotesIn, user=Depends(require_permission("activities.write"))):
+        call = await _db().voice_calls.find_one({"id": call_id, "owner_id": user["id"]}, {"_id": 0})
+        if not call:
+            raise HTTPException(404, "Call not found")
+        update = {"notes_updated_at": _now(), "notes_by": user.get("name")}
+        if payload.notes is not None:
+            update["notes"] = payload.notes
+        if payload.outcome is not None:
+            update["outcome"] = payload.outcome
+        await _db().voice_calls.update_one({"id": call_id}, {"$set": update})
+        return await _db().voice_calls.find_one({"id": call_id}, {"_id": 0})
+
+    @router.post("/voice/calls/{call_id}/ticket")
+    async def ticket_from_call(call_id: str, user=Depends(require_permission("activities.write"))):
+        call = await _db().voice_calls.find_one({"id": call_id, "owner_id": user["id"]}, {"_id": 0})
+        if not call:
+            raise HTTPException(404, "Call not found")
+        if call.get("ticket_id"):
+            existing = await _db().tickets.find_one({"id": call["ticket_id"]}, {"_id": 0})
+            if existing:
+                return {"created": False, "ticket": existing}
+        ticket = await create_call_ticket(user["id"], call, "manual", assignee_id=user["id"])
+        return {"created": True, "ticket": ticket}
+
+    @router.get("/voice/presence")
+    async def presence_list(user=Depends(get_current_user)):
+        users = await _db().users.find({}, {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1}).to_list(200)
+        rows = {p["user_id"]: p for p in await _db().voice_presence.find({}, {"_id": 0}).to_list(500)}
+        out = []
+        for u in users:
+            p = rows.get(u["id"]) or {}
+            out.append({**u, "status": p.get("status", "offline"), "softphone": p.get("softphone", False), "last_seen": p.get("last_seen"), "online": presence_online(p), "identity": agent_identity(u["id"])})
+        out.sort(key=lambda r: (not r["online"], r.get("name") or ""))
+        return out
+
+    @router.post("/voice/presence")
+    async def presence_set(payload: PresenceIn, user=Depends(get_current_user)):
+        doc = {"user_id": user["id"], "status": payload.status, "softphone": payload.softphone, "last_seen": _now(), "name": user.get("name")}
+        await _db().voice_presence.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+        return {**doc, "online": presence_online(doc)}
 
     @router.get("/voice/calls/live")
     async def live_calls(user=Depends(get_current_user)):
@@ -328,40 +387,50 @@ def fallback_node(flow: dict, node: dict):
     return node_by_id(flow, target) or next((n for n in flow.get("nodes", []) if n.get("type") == "voicemail"), None)
 
 
+async def member_targets(member: str, settings: dict) -> list:
+    member = str(member or "").strip()
+    if not member:
+        return []
+    if member.startswith("sip:"):
+        return [{"kind": "sip", "value": member}]
+    if member.startswith("client:"):
+        return [{"kind": "client", "value": member[7:]}]
+    if re.fullmatch(r"\+?[\d\s\-()]{6,}", member):
+        return [{"kind": "number", "value": _e164(member)}]
+    if re.fullmatch(r"\d{2,6}", member) and settings.get("sip_transfer_domain"):
+        return [{"kind": "sip", "value": f"sip:{member}@{settings['sip_transfer_domain']}"}]
+    user = await _db().users.find_one({"id": member}, {"_id": 0, "phone": 1, "id": 1})
+    if not user:
+        return []
+    targets = []
+    if await user_is_online(user["id"]):
+        targets.append({"kind": "client", "value": agent_identity(user["id"])})
+    if user.get("phone"):
+        targets.append({"kind": "number", "value": _e164(user["phone"])})
+    return targets
+
+
 async def resolve_targets(owner_id: str, node: dict, settings: dict) -> list:
-    """Returns list of {'kind': 'number'|'client'|'sip', 'value': str}."""
+    """Returns list of {'kind': 'number'|'client'|'sip', 'value': str}; offline agents are skipped."""
     cfg = node.get("config") or {}
-    members = []
+    members, queue = [], None
     if node.get("type") == "queue":
         name = cfg.get("queue") or cfg.get("destination") or node.get("label")
         queue = await _db().voice_queues.find_one({"owner_id": owner_id, "$or": [{"id": name}, {"name": {"$regex": f"^{re.escape(str(name))}$", "$options": "i"}}]}, {"_id": 0})
         if queue:
             members = list(queue.get("members") or [])
-            if members and queue.get("strategy") != "ring_all":
-                index = int(queue.get("rotation", 0)) % len(members)
-                members = [members[index]]
-                await _db().voice_queues.update_one({"id": queue["id"]}, {"$set": {"rotation": index + 1}})
     else:
         members = [cfg.get("destination")] if cfg.get("destination") else []
-    targets = []
+    available = []
     for member in members:
-        member = str(member).strip()
-        if not member:
-            continue
-        if member.startswith("sip:"):
-            targets.append({"kind": "sip", "value": member})
-        elif member.startswith("client:"):
-            targets.append({"kind": "client", "value": member[7:]})
-        elif re.fullmatch(r"\+?[\d\s\-()]{6,}", member):
-            targets.append({"kind": "number", "value": _e164(member)})
-        elif re.fullmatch(r"\d{2,6}", member) and settings.get("sip_transfer_domain"):
-            targets.append({"kind": "sip", "value": f"sip:{member}@{settings['sip_transfer_domain']}"})
-        else:
-            user = await _db().users.find_one({"id": member}, {"_id": 0, "phone": 1, "id": 1})
-            if user:
-                targets.append({"kind": "client", "value": agent_identity(user["id"])})
-                if user.get("phone"):
-                    targets.append({"kind": "number", "value": _e164(user["phone"])})
+        targets = await member_targets(member, settings)
+        if targets:
+            available.append(targets)
+    if queue and available and queue.get("strategy") != "ring_all":
+        index = int(queue.get("rotation", 0)) % len(available)
+        available = [available[index]]
+        await _db().voice_queues.update_one({"id": queue["id"]}, {"$set": {"rotation": index + 1}})
+    targets = [t for group in available for t in group]
     if not targets and settings.get("agent_fallback_number"):
         targets.append({"kind": "number", "value": settings["agent_fallback_number"]})
     return targets
@@ -395,12 +464,76 @@ async def apply_status(owner_id: str, provider_call_id: str, raw_status: str, ex
     if status in {"completed", "failed", "no_answer"}:
         update["ended_at"] = _now()
     await _db().voice_calls.update_one({"owner_id": owner_id, "provider_call_id": provider_call_id}, {"$set": update})
+    if status in {"completed", "failed", "no_answer"}:
+        call = await find_call(owner_id, provider_call_id)
+        if call:
+            await finalize_call(owner_id, call["id"])
 
 
 async def push_recording(owner_id: str, provider_call_id: str, url: str, duration: str | None):
     if not url:
         return
     await _db().voice_calls.update_one({"owner_id": owner_id, "provider_call_id": provider_call_id}, {"$push": {"recording_urls": {"url": url, "duration": duration, "completed_at": _now()}}, "$set": {"recording_available": True}})
+    call = await find_call(owner_id, provider_call_id)
+    if call and call.get("ticket_id"):
+        await _db().tickets.update_one({"id": call["ticket_id"]}, {"$push": {"comments": {"id": str(uuid.uuid4()), "author": "Voice system", "body": f"Recording available: {url}", "internal": True, "created_at": _now()}}})
+    elif call:
+        await finalize_call(owner_id, call["id"])
+
+
+def presence_online(p: dict) -> bool:
+    if not p or p.get("status") != "online" or not p.get("last_seen"):
+        return False
+    try:
+        seen = datetime.fromisoformat(p["last_seen"].replace("Z", "+00:00"))
+        return (datetime.now(seen.tzinfo) - seen).total_seconds() < PRESENCE_TTL
+    except Exception:
+        return False
+
+
+async def user_is_online(user_id: str) -> bool:
+    return presence_online(await _db().voice_presence.find_one({"user_id": user_id}, {"_id": 0}))
+
+
+def _ticket_body(call: dict, reason: str) -> str:
+    who = call.get("contact_name") or call.get("from") or "Unknown caller"
+    kind = "Voicemail" if reason == "voicemail" else "Missed call" if reason == "missed" else "Call"
+    lines = [f"{kind} from {who} ({call.get('from') or '—'}) on {call.get('started_at') or call.get('initiated_at')}",
+             f"Direction: {call.get('direction')} · Carrier: {call.get('provider')} · Status: {call.get('status')} · Duration: {call.get('duration_seconds') or 0}s"]
+    if call.get("ivr_path"):
+        lines.append("IVR path: " + " → ".join(call["ivr_path"]))
+    if call.get("collected_digits"):
+        lines.append("Keys pressed: " + ", ".join(call["collected_digits"]))
+    for rec in call.get("recording_urls") or []:
+        lines.append(f"Recording: {rec.get('url')}")
+    if call.get("notes"):
+        lines.append("Agent notes: " + call["notes"])
+    return "\n".join(lines)
+
+
+async def create_call_ticket(owner_id: str, call: dict, reason: str, assignee_id: str | None = None) -> dict:
+    who = call.get("contact_name") or call.get("from") or call.get("to") or "unknown number"
+    subject = {"voicemail": f"Voicemail from {who}", "missed": f"Missed call from {who}"}.get(reason, f"Call with {who}")
+    payload = deps["TicketIn"](subject=subject, description=_ticket_body(call, reason), contact_id=call.get("contact_id"), priority="high" if reason == "missed" else "medium", channel="call", assignee_id=assignee_id, custom={"call_id": call["id"], "call_reason": reason})
+    ticket = await deps["insert_ticket"](payload, owner_id)
+    await _db().voice_calls.update_one({"id": call["id"]}, {"$set": {"ticket_id": ticket["id"], "ticket_reason": reason}})
+    return ticket
+
+
+async def finalize_call(owner_id: str, call_id: str):
+    """Auto-create tickets for inbound voicemails and missed calls once a call has ended."""
+    call = await _db().voice_calls.find_one({"id": call_id, "owner_id": owner_id}, {"_id": 0})
+    if not call or call.get("ticket_id") or call.get("direction") != "inbound" or call.get("status") not in {"completed", "failed", "no_answer"}:
+        return
+    settings = await get_settings(owner_id)
+    disposition = call.get("disposition") or ""
+    if disposition == "voicemail_left" or (disposition == "voicemail" and call.get("recording_available")):
+        if settings.get("auto_ticket_voicemail", True):
+            await create_call_ticket(owner_id, call, "voicemail")
+        return
+    if disposition in {"queue", "transfer"} or call.get("status") in {"failed", "no_answer"}:
+        if settings.get("auto_ticket_missed", True):
+            await create_call_ticket(owner_id, call, "missed")
 
 
 async def contact_for(owner_id: str, number: str) -> dict | None:
@@ -899,6 +1032,7 @@ async def telnyx_handle(owner_id: str, event: dict, settings: dict, request: Req
             duration = None
         status = "completed" if call.get("status") == "connected" or call.get("connected_at") else STATUS_MAP.get(p.get("hangup_cause", ""), "no_answer")
         await _db().voice_calls.update_one({"id": call["id"]}, {"$set": {"status": status, "ended_at": _now(), "pending": None, **({"duration_seconds": duration} if duration is not None else {})}})
+        await finalize_call(owner_id, call["id"])
         return
     if etype in {"call.machine.detection.ended", "call.dtmf.received", "call.playback.ended", "call.speak.started"}:
         return

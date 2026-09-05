@@ -853,8 +853,7 @@ async def list_tickets(user=Depends(get_current_user)):
     items = await db.tickets.find({"owner_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return items
 
-@api_router.post("/tickets")
-async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
+async def _insert_ticket(payload: TicketIn, owner_id: str) -> dict:
     cfg = await db.helpdesk_config.find_one({}, {"_id": 0}) or {}
     sla_cfg = cfg.get("sla") or SLAConfigIn().model_dump()
     sla_dates = _sla_due_dates(payload.priority, sla_cfg)
@@ -865,7 +864,7 @@ async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
         **payload.model_dump(),
         "assignee_id": assignee,
         "id": str(uuid.uuid4()),
-        "owner_id": user["id"],
+        "owner_id": owner_id,
         "comments": [],
         **sla_dates,
         "first_responded_at": None,
@@ -876,6 +875,11 @@ async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
     await db.tickets.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@api_router.post("/tickets")
+async def create_ticket(payload: TicketIn, user=Depends(get_current_user)):
+    return await _insert_ticket(payload, user["id"])
 
 @api_router.put("/tickets/{tid}")
 async def update_ticket(tid: str, payload: TicketIn, user=Depends(get_current_user)):
@@ -5333,7 +5337,7 @@ async def webhook_inbound(channel: str, owner_id: str, request: Request):
 
 # ---------- Invitations ----------
 
-telephony.init(db=db, get_current_user=get_current_user, require_permission=require_permission, encrypt_secret=encrypt_secret, decrypt_secret=decrypt_secret, now_utc_iso=now_utc_iso, mask=mask)
+telephony.init(db=db, get_current_user=get_current_user, require_permission=require_permission, encrypt_secret=encrypt_secret, decrypt_secret=decrypt_secret, now_utc_iso=now_utc_iso, mask=mask, insert_ticket=_insert_ticket, TicketIn=TicketIn)
 telephony.build_routes()
 api_router.include_router(telephony.router)
 app.include_router(api_router)
